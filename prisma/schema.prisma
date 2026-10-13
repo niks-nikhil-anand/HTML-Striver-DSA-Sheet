@@ -1,0 +1,141 @@
+// Striver A2Z tracker schema. See PRISMA_PLAN.md for the reasoning behind each model.
+//
+// Prisma 7: the connection URL lives in prisma.config.ts, not here.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum RevisionStatus {
+  NEEDS_REVISION
+  MASTERED
+}
+
+enum CompletionEventKind {
+  COMPLETE
+  UNCOMPLETE
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+// Core user row. The auth library chosen in Phase 2 (Better Auth / Auth.js) adds its own
+// Account / Session / Verification tables next to this one; the fields below are the
+// common subset both libraries expect.
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  name          String?
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  plan        StudyPlan?
+  preferences UserPreferences?
+  progress    ProblemProgress[]
+  events      CompletionEvent[]
+}
+
+// ---------------------------------------------------------------------------
+// Sheet data (seeded from data/problems.json, idempotent upsert by id)
+// ---------------------------------------------------------------------------
+
+model Problem {
+  id              String     @id // "tuf-401": stable, derived from takeuforward's item id
+  order           Int        @unique // 1..452, official sheet order; drives the schedule
+  title           String
+  topic           String
+  subtopic        String
+  difficulty      Difficulty
+  tier            String? // basic | core | pro (source of the difficulty mapping)
+  url             String // primary practice link (LeetCode > GFG > takeuforward)
+  tufUrl          String
+  leetcodeUrl     String?
+  gfgUrl          String?
+  solutionUrl     String? // C++ solution
+  javaSolutionUrl String?
+
+  progress ProblemProgress[]
+  events   CompletionEvent[]
+
+  @@index([topic])
+  @@index([difficulty])
+}
+
+// ---------------------------------------------------------------------------
+// Per-user data
+// ---------------------------------------------------------------------------
+
+// One per user. The schedule is DERIVED from startDate + Problem.order and never stored,
+// so ticking problems can never move the plan.
+model StudyPlan {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  startDate    DateTime @db.Date // default 2026-10-13, set when the plan is created
+  perDay       Int      @default(2)
+  sheetVersion String   @default("a2z-2026-10")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// One row per (user, problem) that has any non-default state. The row is deleted when
+// completion, revision and note all return to their defaults.
+model ProblemProgress {
+  userId    String
+  problemId String
+
+  completedAt   DateTime? // instant of completion (recent-activity ordering)
+  completedDate DateTime?       @db.Date // user's LOCAL calendar day (streaks), supplied by the client
+  revision      RevisionStatus?
+  note          String?         @db.Text // <= 5000 chars, enforced in the API schema
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt // last-write-wins marker
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problem Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
+
+  @@id([userId, problemId])
+  @@index([userId, completedDate]) // streaks and activity chart
+  @@index([userId, revision]) // revision lists
+}
+
+model UserPreferences {
+  userId               String   @id
+  filters              Json // same shape as Filters in lib/types.ts
+  celebratedMilestones Int[]    @default([])
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Append-only history so un-ticking a problem never loses analytics.
+model CompletionEvent {
+  id        String              @id @default(cuid())
+  userId    String
+  problemId String
+  kind      CompletionEventKind
+  localDate DateTime            @db.Date
+  at        DateTime            @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problem Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
+
+  @@index([userId, at])
+  @@index([userId, localDate])
+}
