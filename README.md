@@ -5,7 +5,7 @@ A personal Striver A2Z DSA tracker: **two problems a day starting 13 Oct 2026** 
 ```bash
 npm install
 npm run dev                      # http://localhost:3000
-npm test                         # vitest (21 tests)
+npm test                         # vitest (API tests need DATABASE_URL)
 npm run lint && npm run build
 ```
 
@@ -40,6 +40,28 @@ public/images/                  motivation posters (kebab-case names), listed in
 ```
 
 `page.tsx`/`layout.tsx` are Server Components; anything using LocalStorage, the clock or events is a `"use client"` leaf.
+
+## Saving to a database (API + sync)
+
+Progress, notes, revision flags, filters and the start date can be saved to Postgres through a JSON API; the UI stays instant and writes in the background (offline changes queue and retry). Design: [PRISMA_PLAN.md](PRISMA_PLAN.md), [API_IMPLEMENTATION_PLAN.md](API_IMPLEMENTATION_PLAN.md).
+
+```bash
+cp .env.example .env            # set DATABASE_URL (and DEV_USER_ID for local dev)
+npx prisma migrate deploy       # create tables
+npx prisma db seed              # load the 452 problems (idempotent)
+npm run dev
+```
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Pooled Postgres URL used by the app |
+| `DIRECT_URL` | Optional non-pooled URL for migrations/seed |
+| `DEV_USER_ID` | **Local development only.** Until real sign-in exists, the API treats every request as this user. Ignored (401) on Vercel / production |
+| `NEXT_PUBLIC_SYNC` | `on` = save to the server when signed in; anything else = LocalStorage only |
+
+Without a session the app falls back to **guest mode** (LocalStorage), exactly as before, and a header badge says "This device only". After first sign-in, a one-time dialog offers to move the device's progress into the account (merge, never overwrite).
+
+API (`/api/v1`, JSON, `no-store`): `GET /progress`, `PUT|DELETE /progress/{problemId}`, `DELETE /progress` (`{"confirm":"RESET"}`), `PUT /plan`, `PATCH /preferences`, `GET /export`, `POST /import` (`replace|merge`), `POST /migrate/local`, plus public `GET /api/health`. Errors are `{ "error": { "code", "message", "fields?" } }`. Code lives in `app/api/**` (thin handlers) → `lib/server/services/*` → Prisma; the browser side is `lib/sync/*` (client, diff, queue, controller) behind `providers/tracker-provider.tsx`.
 
 ## Design system (sci-fi dark & light)
 
