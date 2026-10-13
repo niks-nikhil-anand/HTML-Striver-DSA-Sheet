@@ -4,6 +4,7 @@ import { useCallback, useState, type ReactNode } from "react";
 import { useLocalFlag } from "@/hooks/use-local-flag";
 import { useTracker } from "@/hooks/use-tracker";
 import { cn } from "@/lib/utils";
+import { ClaimLocalDialog } from "./claim-local-dialog";
 import { Header } from "./header";
 import { MobileDrawer } from "./mobile-drawer";
 import { Sidebar } from "./sidebar";
@@ -32,6 +33,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       >
         <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
         <MobileDrawer open={drawer} onClose={closeDrawer} />
+        <ClaimLocalDialog />
         <Header onOpenMenu={() => setDrawer(true)} />
         <main className="mx-auto max-w-7xl px-3 pb-16 pt-6 sm:px-6">{children}</main>
       </div>
