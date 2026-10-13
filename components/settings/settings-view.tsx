@@ -10,18 +10,18 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useTracker } from "@/hooks/use-tracker";
 import { formatDate } from "@/lib/dates";
 import { PROBLEMS, PROBLEM_IDS } from "@/lib/problems";
-import { exportProgress, parseImport } from "@/lib/storage";
+import { parseImport } from "@/lib/storage";
 import type { Progress } from "@/lib/types";
 import { StartDateEditor } from "./start-date-editor";
 
 export function SettingsView() {
-  const { progress, resetProgress, replaceProgress, setStartDate, storageOk, corrupted, schedule } = useTracker();
+  const { progress, resetProgress, replaceProgress, exportData, setStartDate, storageOk, corrupted, schedule, sync } = useTracker();
   const fileRef = useRef<HTMLInputElement>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [pending, setPending] = useState<Progress | null>(null);
 
-  function doExport() {
-    const blob = new Blob([exportProgress(progress)], { type: "application/json" });
+  async function doExport() {
+    const blob = new Blob([await exportData()], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -41,6 +41,15 @@ export function SettingsView() {
 
   return (
     <div className="grid max-w-3xl gap-5">
+      {sync.enabled && (
+        <div role="status" className="rounded-xl border border-border bg-card/60 px-4 py-3 text-sm">
+          {sync.mode === "synced"
+            ? "Signed in: your progress is saved to your account and kept in sync across devices."
+            : sync.mode === "unknown"
+              ? "Connecting to the server…"
+              : "Guest mode: progress is saved on this device only. Sign in to sync it."}
+        </div>
+      )}
       {!storageOk && (
         <div role="alert" className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
           LocalStorage is unavailable or full, so progress won&apos;t survive a refresh. Export your progress regularly.
@@ -103,7 +112,7 @@ export function SettingsView() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setResetOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => { resetProgress(); setResetOpen(false); toast.success("Progress reset"); }}>Yes, reset everything</Button>
+            <Button variant="destructive" onClick={async () => { try { await resetProgress(); setResetOpen(false); toast.success("Progress reset"); } catch (e) { toast.error(e instanceof Error ? e.message : "Reset failed"); } }}>Yes, reset everything</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -118,7 +127,7 @@ export function SettingsView() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPending(null)}>Cancel</Button>
-            <Button onClick={() => { if (pending) replaceProgress(pending); setPending(null); toast.success("Progress imported"); }}>Import</Button>
+            <Button onClick={async () => { if (!pending) return; try { await replaceProgress(pending); setPending(null); toast.success("Progress imported"); } catch (e) { toast.error("Import failed", { description: e instanceof Error ? e.message : undefined }); } }}>Import</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
