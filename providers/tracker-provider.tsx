@@ -17,10 +17,13 @@ import {
 import {
   clearProgress,
   defaultProgress,
+  exportProgress,
   getBrowserStorage,
   loadProgress,
   saveProgress,
 } from "@/lib/storage";
+import { SyncController, type SyncMode } from "@/lib/sync/controller";
+import type { SyncState } from "@/lib/sync/queue";
 import { DEFAULT_FILTERS, type DayPlan, type Filters, type Problem, type Progress, type RevisionStatus } from "@/lib/types";
 
 export interface TrackerValue {
@@ -41,18 +44,26 @@ export interface TrackerValue {
   filtered: Problem[];
   storageOk: boolean;
   corrupted: boolean;
+  /** Server sync (feature-flagged). `mode` is "guest" when signed out or when sync is disabled. */
+  sync: { enabled: boolean; mode: SyncMode; state: SyncState; pending: number };
+  /** Set when this device has progress, the account is empty and the user has not chosen yet. */
+  claimOffer: Progress | null;
+  claimLocal: () => Promise<void>;
+  dismissClaim: () => void;
+  exportData: () => Promise<string>;
   toggleComplete: (id: string) => void;
   setNote: (id: string, note: string) => void;
   setRevision: (id: string, status: RevisionStatus | null) => void;
   setFilters: (patch: Partial<Filters>) => void;
   clearFilters: () => void;
   setStartDate: (iso: string) => void;
-  replaceProgress: (p: Progress) => void;
-  resetProgress: () => void;
+  replaceProgress: (p: Progress) => Promise<void>;
+  resetProgress: () => Promise<void>;
 }
 
 export const TrackerContext = createContext<TrackerValue | null>(null);
 const problemById = new Map(PROBLEMS.map((p) => [p.id, p]));
+const SYNC_ENABLED = process.env.NEXT_PUBLIC_SYNC === "on";
 
 export function TrackerProvider({ children }: { children: ReactNode }) {
   const [progress, setProgress] = useState<Progress>(defaultProgress);
@@ -62,6 +73,10 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
   const [corrupted, setCorrupted] = useState(false);
   const ref = useRef(progress);
   const todayRef = useRef(today);
+  const controllerRef = useRef<SyncController | null>(null);
+  const [syncMode, setSyncMode] = useState<SyncMode>("guest");
+  const [syncState, setSyncState] = useState<{ state: SyncState; pending: number }>({ state: "idle", pending: 0 });
+  const [claimOffer, setClaimOffer] = useState<Progress | null>(null);
 
   // Read browser-only state after hydration.
   useEffect(() => {
@@ -77,6 +92,28 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
     setToday(t);
     setReady(true);
     /* eslint-enable react-hooks/set-state-in-effect */
+
+    if (!SYNC_ENABLED) return;
+    const controller = new SyncController(
+      {
+        getProgress: () => ref.current,
+        apply: (p) => {
+          ref.current = p;
+          setProgress(p);
+        },
+        onMode: setSyncMode,
+        onStatus: (s) => setSyncState({ state: s.state, pending: s.pending }),
+        onClaimOffer: setClaimOffer,
+        notify: (kind, message) => (kind === "error" ? toast.error(message) : toast(message)),
+      },
+      storage,
+    );
+    controllerRef.current = controller;
+    void controller.start();
+    return () => {
+      controller.destroy();
+      controllerRef.current = null;
+    };
   }, []);
 
   // Roll "today" over at midnight / when the tab regains focus.
@@ -104,8 +141,10 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
   }, [progress, ready]);
 
   const commit = useCallback((next: Progress) => {
+    const prev = ref.current;
     ref.current = next;
     setProgress(next);
+    controllerRef.current?.track(prev, next); // queues the minimal server writes (no-op in guest mode)
   }, []);
 
   const schedule = useMemo(() => generateSchedule(PROBLEMS, progress.startDate), [progress.startDate]);
@@ -194,12 +233,44 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
     [commit],
   );
 
-  const replaceProgress = useCallback((p: Progress) => commit(p), [commit]);
+  const replaceProgress = useCallback(
+    async (p: Progress) => {
+      const c = controllerRef.current;
+      if (c && c.mode === "synced") {
+        await c.importReplace(p); // server validates, replaces, then we adopt its snapshot
+        return;
+      }
+      commit(p);
+    },
+    [commit],
+  );
 
-  const resetProgress = useCallback(() => {
+  const resetProgress = useCallback(async () => {
+    const c = controllerRef.current;
+    if (c && c.mode === "synced") {
+      await c.reset();
+      return;
+    }
     clearProgress(getBrowserStorage());
     commit(defaultProgress());
   }, [commit]);
+
+  const exportData = useCallback(async () => {
+    const fromServer = await controllerRef.current?.exportText();
+    return fromServer ?? exportProgress(ref.current);
+  }, []);
+
+  const claimLocal = useCallback(async () => {
+    const offer = claimOffer;
+    if (!offer || !controllerRef.current) return;
+    await controllerRef.current.claimLocal(offer);
+    setClaimOffer(null);
+  }, [claimOffer]);
+
+  const dismissClaim = useCallback(() => {
+    controllerRef.current?.dismissClaim();
+    setClaimOffer(null);
+  }, []);
 
   const filters = progress.prefs.filters;
   const filtered = useMemo(
@@ -222,6 +293,7 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
   const value: TrackerValue = {
     ready, progress, today, schedule, dayOf, problemById, todayIndex, todayPlan, overall, streaks, topics, overdue,
     filters, filtered, storageOk, corrupted,
+    sync: { enabled: SYNC_ENABLED, mode: syncMode, ...syncState }, claimOffer, claimLocal, dismissClaim, exportData,
     toggleComplete, setNote, setRevision, setFilters, clearFilters, setStartDate, replaceProgress, resetProgress,
   };
   return <TrackerContext.Provider value={value}>{children}</TrackerContext.Provider>;
