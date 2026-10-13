@@ -5,6 +5,7 @@ import { CalendarDays, Flame, Menu } from "lucide-react";
 import { useTracker } from "@/hooks/use-tracker";
 import { formatDate } from "@/lib/dates";
 import { GlobalSearch } from "./global-search";
+import { SyncIndicator } from "./sync-indicator";
 import { ThemeToggle } from "./theme-toggle";
 
 export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
@@ -45,6 +46,7 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
           >
             <Flame className="size-3.5" /> {streaks.current}d
           </span>
+          <SyncIndicator />
           <ThemeToggle />
         </div>
       </div>
