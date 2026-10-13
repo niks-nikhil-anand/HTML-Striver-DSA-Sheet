@@ -71,4 +71,4 @@ Rule of thumb: `page.tsx` / `layout.tsx` are Server Components; anything touchin
 - **`cacheComponents` prerendering**: no clock/random in Server Components; all time-dependent code is in client effects after hydration.
 - **Provider remount on navigation**: provider lives in the `(tracker)` layout, so it persists across pages.
 - **Repo has no commits yet**: nothing to roll back to; changes are additive. Commit the scaffold first if you want a clean baseline.
-- **Peer-dependency conflict when installing vitest**: use `--legacy-peer-deps`.
+- **Peer-dependency conflict when installing vitest** (hit on Vercel): resolved by pinning `@types/node@^24`, so a plain `npm install` works; `--legacy-peer-deps` is no longer needed.

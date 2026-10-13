@@ -3,7 +3,7 @@
 A personal Striver A2Z DSA tracker: **two problems a day starting 13 Oct 2026** (226 days, ending 26 May 2027), with streaks, topic progress, revision lists, notes, C++/Java solution links and JSON backup. Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 · shadcn/ui · Lucide. No backend; progress lives in the browser's LocalStorage.
 
 ```bash
-npm install --legacy-peer-deps   # flag only needed for the vitest peer-dependency conflict
+npm install
 npm run dev                      # http://localhost:3000
 npm test                         # vitest (21 tests)
 npm run lint && npm run build
