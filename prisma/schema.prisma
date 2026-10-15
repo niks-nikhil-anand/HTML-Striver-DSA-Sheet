@@ -4,7 +4,7 @@
 
 generator client {
   provider = "prisma-client"
-  output   = "../lib/generated/prisma"
+  output   = "../lib/prisma-client"
 }
 
 datasource db {
@@ -47,6 +47,7 @@ model User {
   preferences UserPreferences?
   progress    ProblemProgress[]
   events      CompletionEvent[]
+  achievements UserAchievement[]
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,8 @@ model ProblemProgress {
 
 model UserPreferences {
   userId               String   @id
+  ui                   Json     @default("{}")
+  writeVersions        Json     @default("{}")
   filters              Json // same shape as Filters in lib/types.ts
   celebratedMilestones Int[]    @default([])
   updatedAt            DateTime @updatedAt
@@ -138,4 +141,13 @@ model CompletionEvent {
 
   @@index([userId, at])
   @@index([userId, localDate])
+}
+
+model UserAchievement {
+  userId String
+  tag String
+  unlockedAt DateTime @default(now())
+  notifiedAt DateTime?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([userId, tag])
 }
