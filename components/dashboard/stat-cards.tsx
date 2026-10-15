@@ -3,7 +3,6 @@
 import { CheckCircle2, Flame, Gauge, Hourglass, ListChecks, Target, type LucideIcon } from "lucide-react";
 import { Bar } from "@/components/common/bar";
 import { useTracker } from "@/hooks/use-tracker";
-import { dayProgress } from "@/lib/stats";
 import { cn } from "@/lib/utils";
 
 function StatCard({ icon: Icon, label, value, sub, tone, bar, barLabel }: { icon: LucideIcon; label: string; value: string | number; sub: string; tone: string; bar?: number; barLabel?: string }) {
@@ -23,11 +22,11 @@ function StatCard({ icon: Icon, label, value, sub, tone, bar, barLabel }: { icon
 }
 
 export function StatCards() {
-  const { overall, streaks, todayPlan, progress } = useTracker();
-  const dp = dayProgress(todayPlan, progress.completed);
+  const { overall, streaks, today, progress } = useTracker();
+  const solvedToday = Object.values(progress.completed).filter((record) => record.date === today).length;
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-      <StatCard icon={ListChecks} label="Total problems" value={overall.total} sub="in the A2Z plan" tone="text-primary" />
+      <StatCard icon={ListChecks} label="Total problems" value={overall.total} sub="in the A2Z sheet" tone="text-primary" />
       <StatCard icon={CheckCircle2} label="Completed" value={overall.done} sub="problems solved" tone="text-success" />
       <StatCard icon={Hourglass} label="Pending" value={overall.pending} sub="still to go" tone="text-warning" />
       <StatCard icon={Gauge} label="Completion" value={`${overall.pct}%`} sub="of the full sheet" tone="text-secondary" bar={overall.pct} barLabel="Overall completion" />
@@ -35,11 +34,9 @@ export function StatCards() {
       <StatCard
         icon={Target}
         label="Today"
-        value={todayPlan ? `${dp.done}/${dp.total}` : "–"}
-        sub={todayPlan ? (dp.done === dp.total ? "Goal complete" : "problems solved") : "nothing scheduled"}
+        value={solvedToday}
+        sub="problems solved today"
         tone="text-success"
-        bar={todayPlan ? (dp.done / Math.max(dp.total, 1)) * 100 : 0}
-        barLabel="Today's progress"
       />
     </div>
   );
