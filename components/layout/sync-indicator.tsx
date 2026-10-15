@@ -1,22 +1,21 @@
 "use client";
 
-import { Cloud, CloudOff, HardDrive, Loader2, TriangleAlert } from "lucide-react";
+import { Cloud, CloudOff, Loader2, TriangleAlert } from "lucide-react";
 import { useTracker } from "@/hooks/use-tracker";
 import { cn } from "@/lib/utils";
 
 /** Shows where changes are going: server (Saved / Saving / Offline) or this device only (guest). Hidden when sync is off. */
 export function SyncIndicator() {
-  const { sync } = useTracker();
+  const { sync, retrySave } = useTracker();
   if (!sync.enabled) return null;
 
   let icon = <Cloud className="size-3.5" />;
   let label = "Saved";
   let tone = "text-success border-success/35 bg-success/10";
 
-  if (sync.mode === "guest") {
-    icon = <HardDrive className="size-3.5" />;
-    label = "This device only";
-    tone = "text-muted-foreground border-border bg-card/60";
+  if (sync.mode === "unauthenticated") {
+    label = "Sign in required";
+    tone = "text-destructive";
   } else if (sync.mode === "unknown") {
     icon = <Loader2 className="size-3.5 animate-spin" />;
     label = "Connecting…";
@@ -36,13 +35,15 @@ export function SyncIndicator() {
   }
 
   return (
-    <span
-      role="status"
+    <button
+      type="button"
+      onClick={retrySave}
+      disabled={sync.state !== "error" && sync.state !== "offline"}
       aria-live="polite"
       title={label}
       className={cn("hidden items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium lg:inline-flex", tone)}
     >
-      {icon} {label}
-    </span>
+      {icon} {label}{(sync.state === "error" || sync.state === "offline") && " · Retry"}
+    </button>
   );
 }

@@ -2,16 +2,20 @@
 
 import { useSyncExternalStore } from "react";
 import { Moon, Sun } from "lucide-react";
-import { useTheme } from "next-themes";
+import { useTracker } from "@/hooks/use-tracker";
 import { cn } from "@/lib/utils";
 
-const noop = () => () => {};
+const subscribe = (callback: () => void) => {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  media.addEventListener("change", callback);
+  return () => media.removeEventListener("change", callback);
+};
 
 export function ThemeToggle() {
-  const { resolvedTheme, setTheme } = useTheme();
-  // false on the server and during hydration, true afterwards (no mismatch, no flash of wrong icon state)
-  const mounted = useSyncExternalStore(noop, () => true, () => false);
-  const dark = mounted && resolvedTheme === "dark";
+  const { progress, setUi } = useTracker();
+  const systemDark = useSyncExternalStore(subscribe, () => window.matchMedia("(prefers-color-scheme: dark)").matches, () => false);
+  const dark = progress.prefs.ui?.theme === "dark" || ((progress.prefs.ui?.theme ?? "system") === "system" && systemDark);
+  const setTheme = (theme: "dark" | "light") => setUi({ theme });
 
   return (
     <button
