@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultProgress } from "../../storage";
+import { defaultProgress } from "../../progress";
 import type { Progress } from "../../types";
 import { ApiClientError } from "../api-client";
 import { applyOp, diffProgress, mergeOps, type SyncOp } from "../diff";
@@ -62,11 +62,17 @@ describe("SyncQueue", () => {
   afterEach(() => vi.useRealTimers());
 
   const row = (id: string, body: object): SyncOp => ({ kind: "row", problemId: id, body });
-  const memoryStorage = () => {
-    const m = new Map<string, string>();
-    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), m };
-  };
 
+
+  it("starts pending preference writes synchronously when flushing on page hide", () => {
+    const send = vi.fn(async () => {});
+    const queue = new SyncQueue({ send });
+    queue.enqueue({ kind: "prefs", ui: { problemScrollY: 840 } });
+    expect(send).not.toHaveBeenCalled();
+    queue.flushNow();
+    expect(send).toHaveBeenCalledWith({ kind: "prefs", ui: { problemScrollY: 840 } });
+    queue.destroy();
+  });
   it("sends ticks immediately and in order", async () => {
     const sent: string[] = [];
     const q = new SyncQueue({ send: async (op) => void sent.push(op.kind === "row" ? op.problemId : op.kind) });
@@ -131,8 +137,8 @@ describe("SyncQueue", () => {
         if (op.kind === "row" && op.problemId === "bad") throw new ApiClientError("VALIDATION", 400, "nope");
         if (op.kind === "row" && op.problemId === "stale") throw new ApiClientError("CONFLICT", 409, "newer", undefined);
       },
-      onRejected: (op) => rejected.push((op as { problemId: string }).problemId),
-      onConflict: (op) => conflicts.push((op as { problemId: string }).problemId),
+      onRejected: (op) => { rejected.push((op as { problemId: string }).problemId); },
+      onConflict: (op) => { conflicts.push((op as { problemId: string }).problemId); },
     });
     q.enqueue(row("bad", { note: "x" }));
     q.enqueue(row("stale", { completed: true, localDate: "2026-10-13" }));
@@ -142,19 +148,14 @@ describe("SyncQueue", () => {
     expect(q.pendingOps()).toHaveLength(0);
   });
 
-  it("persists unsent ops and restores them in a new session", async () => {
-    const storage = memoryStorage();
-    const failing = new SyncQueue({ send: async () => { throw new ApiClientError("NETWORK", 0, "down"); }, storage, storageKey: "k" });
+  it("keeps failed edits in memory but starts a new session empty", async () => {
+    const failing = new SyncQueue({ send: async () => { throw new ApiClientError("NETWORK", 0, "down"); } });
     failing.enqueue(row("a", { completed: true, localDate: "2026-10-13" }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(JSON.parse(storage.m.get("k")!)).toHaveLength(1);
+    expect(failing.pendingOps()).toHaveLength(1);
     failing.destroy();
-
-    const sent: SyncOp[] = [];
-    const fresh = new SyncQueue({ send: async (op) => void sent.push(op), storage, storageKey: "k" });
-    expect(fresh.restore()).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(sent).toHaveLength(1);
-    expect(storage.m.has("k")).toBe(false); // cleared after success
+    const fresh = new SyncQueue({ send: async () => {} });
+    expect(fresh.pendingOps()).toHaveLength(0);
+    fresh.destroy();
   });
 });

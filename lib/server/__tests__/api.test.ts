@@ -13,6 +13,8 @@ import { GET as exportGET } from "@/app/api/v1/export/route";
 import { POST as importPOST } from "@/app/api/v1/import/route";
 import { POST as migratePOST } from "@/app/api/v1/migrate/local/route";
 import { db } from "@/lib/server/db";
+import { DEFAULT_FILTERS } from "@/lib/types";
+import { parseImport } from "@/lib/progress";
 import type { ProgressRowDTO, SnapshotDTO } from "@/lib/api-types";
 
 const run = Math.random().toString(36).slice(2, 8);
@@ -138,6 +140,115 @@ describe("PUT /progress/:problemId", () => {
 });
 
 describe("plan & preferences", () => {
+  it("keeps the complete close-time snapshot when an older save arrives afterwards", async () => {
+    as(A);
+    const sessionId = "af527943-689d-4e60-a4ea-451db92b508a";
+    const filters = { ...DEFAULT_FILTERS, status: "pending", sort: "title" };
+    await prefsPATCH(req("PATCH", { mutation: { sessionId, sequence: 2 }, filters, ui: { problemPage: 3, problemLayout: "grid", problemScrollY: 867 } }));
+    await prefsPATCH(req("PATCH", { mutation: { sessionId, sequence: 1 }, filters: DEFAULT_FILTERS, ui: { problemPage: 1, problemLayout: "list", problemScrollY: 0 } }));
+    expect((await snapshot()).prefs).toMatchObject({ filters, ui: { problemPage: 3, problemLayout: "grid", problemScrollY: 867 } });
+    // A newly reopened browser has a different session id, so its first save is accepted.
+    await prefsPATCH(req("PATCH", { mutation: { sessionId: "895a54da-bbbf-4986-a23d-9b7b0f6eab87", sequence: 1 }, ui: { problemScrollY: 900 } }));
+    expect((await snapshot()).prefs.ui?.problemScrollY).toBe(900);
+    await prefsPATCH(req("PATCH", { filters: DEFAULT_FILTERS, ui: { problemPage: 1, problemScrollY: 0, problemLayout: "list" } }));
+  });
+
+  it("does not lose independent preference patches arriving concurrently", async () => {
+    as(A);
+    await Promise.all([
+      prefsPATCH(req("PATCH", { ui: { problemPage: 4 } })),
+      prefsPATCH(req("PATCH", { filters: { query: "" }, ui: { problemLayout: "grid" } })),
+    ]);
+    expect((await snapshot()).prefs.ui).toMatchObject({ problemPage: 4, problemLayout: "grid" });
+    await prefsPATCH(req("PATCH", { ui: { problemPage: 1, problemLayout: "list" } }));
+  });
+
+  it("saves scroll with the list view and resets it only when the view changes", async () => {
+    as(A);
+    await prefsPATCH(req("PATCH", { filters: DEFAULT_FILTERS, ui: { problemPage: 2, problemLayout: "grid", problemScrollY: 1480 } }));
+    expect((await snapshot()).prefs.ui).toMatchObject({ problemPage: 2, problemLayout: "grid", problemScrollY: 1480 });
+    await prefsPATCH(req("PATCH", { ui: { theme: "dark" } }));
+    expect((await snapshot()).prefs.ui?.problemScrollY).toBe(1480);
+    const exported = await (await exportGET(req("GET"))).text();
+    expect(parseImport(exported)?.prefs.ui?.problemScrollY).toBe(1480);
+    await prefsPATCH(req("PATCH", { ui: { problemPage: 3 } }));
+    expect((await snapshot()).prefs.ui?.problemScrollY).toBe(0);
+    await prefsPATCH(req("PATCH", { ui: { problemScrollY: 920 } }));
+    await prefsPATCH(req("PATCH", { ui: { problemLayout: "list" } }));
+    expect((await snapshot()).prefs.ui).toMatchObject({ problemPage: 3, problemScrollY: 0 });
+    await prefsPATCH(req("PATCH", { ui: { problemScrollY: 500 } }));
+    await prefsPATCH(req("PATCH", { filters: { query: "sum" } }));
+    expect((await snapshot()).prefs.ui).toMatchObject({ problemPage: 1, problemScrollY: 0 });
+    for (const problemScrollY of [-1, 1.5, 1000001]) {
+      expect((await prefsPATCH(req("PATCH", { ui: { problemScrollY } }))).status).toBe(400);
+    }
+    await prefsPATCH(req("PATCH", { filters: DEFAULT_FILTERS, ui: { problemPage: 1, problemScrollY: 0 } }));
+  });
+
+  it("persists pagination with layout, preserves it for UI changes and resets for new filters", async () => {
+    as(A);
+    await prefsPATCH(req("PATCH", { filters: DEFAULT_FILTERS }));
+    expect((await prefsPATCH(req("PATCH", { ui: { problemPage: 4, problemLayout: "grid" } }))).status).toBe(200);
+    expect((await snapshot()).prefs.ui).toMatchObject({ problemPage: 4, problemLayout: "grid" });
+    await prefsPATCH(req("PATCH", { ui: { problemLayout: "list" } }));
+    expect((await snapshot()).prefs.ui?.problemPage).toBe(4);
+    await prefsPATCH(req("PATCH", { filters: { sort: "title" } }));
+    expect((await snapshot()).prefs.ui).toMatchObject({ problemPage: 1, problemLayout: "list" });
+    await prefsPATCH(req("PATCH", { ui: { problemPage: 3 } }));
+    await prefsPATCH(req("PATCH", { filters: { sort: "title" } }));
+    expect((await snapshot()).prefs.ui?.problemPage).toBe(3);
+    const exported = await (await exportGET(req("GET"))).text();
+    expect(parseImport(exported)?.prefs.ui?.problemPage).toBe(3);
+    for (const problemPage of [0, -1, 1.5, 10001]) {
+      expect((await prefsPATCH(req("PATCH", { ui: { problemPage } }))).status).toBe(400);
+    }
+    await prefsPATCH(req("PATCH", { filters: DEFAULT_FILTERS, ui: { problemPage: 1 } }));
+  });
+
+  it("restores problem filters, sorting and layout from database snapshots", async () => {
+    as(A);
+    const filters = { ...DEFAULT_FILTERS, difficulty: "Medium", topic: "Arrays", status: "pending", query: "sum", sort: "title" };
+    expect((await prefsPATCH(req("PATCH", { filters }))).status).toBe(200);
+    expect((await prefsPATCH(req("PATCH", { ui: { problemLayout: "grid" } }))).status).toBe(200);
+    const saved = await snapshot();
+    expect(saved.prefs.filters).toEqual(filters);
+    expect(saved.prefs.ui?.problemLayout).toBe("grid");
+    expect((await snapshot()).prefs).toEqual(saved.prefs);
+    await prefsPATCH(req("PATCH", { filters: { topic: "Graphs" } }));
+    expect((await snapshot()).prefs.filters).toEqual({ ...filters, topic: "Graphs" });
+    const exported = await (await exportGET(req("GET"))).text();
+    expect(parseImport(exported)?.prefs.ui?.problemLayout).toBe("grid");
+    expect((await prefsPATCH(req("PATCH", { ui: { problemLayout: "invalid" } }))).status).toBe(400);
+    await prefsPATCH(req("PATCH", { filters: DEFAULT_FILTERS, ui: { problemLayout: "list" } }));
+  });
+
+  it("saves the activity range and includes it in snapshots and exports", async () => {
+    as(A);
+    expect((await prefsPATCH(req("PATCH", { ui: { activityRange: "7d" } }))).status).toBe(200);
+    expect((await snapshot()).prefs.ui?.activityRange).toBe("7d");
+    const exported = await (await exportGET(req("GET"))).json();
+    expect(exported.prefs.ui.activityRange).toBe("7d");
+    expect((await prefsPATCH(req("PATCH", { ui: { activityRange: "invalid" } }))).status).toBe(400);
+    await prefsPATCH(req("PATCH", { ui: { activityRange: "year" } }));
+  });
+
+  it("normalizes retired schedule filters from database preferences and API patches", async () => {
+    as(A);
+    await prefsPATCH(req("PATCH", { filters: { topic: "Graphs" } }));
+    await db.userPreferences.update({ where: { userId: A }, data: { filters: { topic: "Graphs", date: "overdue" } } });
+    expect((await snapshot()).prefs.filters).toMatchObject({ topic: "Graphs", date: "all" });
+    expect((await prefsPATCH(req("PATCH", { filters: { date: "today", topic: "All" } }))).status).toBe(200);
+    expect((await snapshot()).prefs.filters).toMatchObject({ date: "all", topic: "All" });
+  });
+
+  it("persists theme and sidebar independently from filters", async () => {
+    as(A);
+    expect((await prefsPATCH(req("PATCH", { ui: { theme: "dark" } }))).status).toBe(200);
+    expect((await prefsPATCH(req("PATCH", { ui: { sidebarCollapsed: true } }))).status).toBe(200);
+    expect((await snapshot()).prefs.ui).toMatchObject({ theme: "dark", sidebarCollapsed: true });
+    expect((await prefsPATCH(req("PATCH", { ui: { theme: "invalid" } }))).status).toBe(400);
+  });
+
   it("saves the start date and rejects invalid dates", async () => {
     as(A);
     expect((await planPUT(req("PUT", { startDate: "2026-11-01" }))).status).toBe(200);
