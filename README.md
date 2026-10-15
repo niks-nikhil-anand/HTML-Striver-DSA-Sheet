@@ -1,6 +1,6 @@
 # A2Z Tracker
 
-A personal Striver A2Z DSA tracker: **two problems a day starting 13 Oct 2026** (226 days, ending 26 May 2027), with streaks, topic progress, revision lists, notes, C++/Java solution links and JSON backup. Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 · shadcn/ui · Lucide. No backend; progress lives in the browser's LocalStorage.
+A personal Striver A2Z DSA tracker: **self-paced practice**, with streaks, topic progress, revision lists, notes, C++/Java solution links and JSON backup. Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 · shadcn/ui · Lucide. Progress and preferences are stored in PostgreSQL through authenticated API routes.
 
 ```bash
 npm install
@@ -15,13 +15,13 @@ See [MIGRATION_PLAN.md](MIGRATION_PLAN.md) for how the prototype was moved into 
 
 | Route | Page |
 |---|---|
-| `/` | Dashboard: hero, stats, today's two problems, timeline, topics, upcoming/recent |
-| `/plan` | Day-by-day calendar and selected-day problems |
+| `/` | Dashboard: overall progress, streaks, topics, milestones and recent activity |
+| `/plan` | Redirects to `/problems` for old bookmarks |
 | `/problems` | All 452 problems with combined filters, sorting, pagination |
 | `/topics` | Topic-wise progress (click a topic to filter problems) |
 | `/revision` | Needs revision / Mastered / Solved-unmarked lists |
 | `/stats` | Statistics & analytics from real progress data |
-| `/settings` | Start date, export/import, reset |
+| `/settings` | Export/import, reset |
 
 ## Structure
 
@@ -31,19 +31,19 @@ app/
   (tracker)/layout.tsx          provider + shell; pages: page, plan, problems, topics, revision, settings
 components/
   ui/ layout/ common/           primitives, shell (sidebar, header, nav), shared widgets
-  dashboard/ plan/ problems/ topics/ revision/ settings/   feature components
-providers/tracker-provider.tsx  state + LocalStorage (read after hydration)
+  dashboard/ problems/ topics/ revision/ settings/   feature components
+providers/tracker-provider.tsx  API state + in-memory pending mutations
 hooks/use-tracker.ts
-lib/                            pure logic: dates, schedule, filters, stats, storage (+ __tests__)
+lib/                            pure logic: dates, filters, stats, progress (+ __tests__)
 data/problems.json              official sheet data
 public/images/                  motivation posters (kebab-case names), listed in lib/posters.ts
 ```
 
-`page.tsx`/`layout.tsx` are Server Components; anything using LocalStorage, the clock or events is a `"use client"` leaf.
+`page.tsx`/`layout.tsx` are Server Components; anything using the clock or events is a `"use client"` leaf.
 
 ## Saving to a database (API + sync)
 
-Progress, notes, revision flags, filters and the start date can be saved to Postgres through a JSON API; the UI stays instant and writes in the background (offline changes queue and retry). Design: [PRISMA_PLAN.md](PRISMA_PLAN.md), [API_IMPLEMENTATION_PLAN.md](API_IMPLEMENTATION_PLAN.md).
+Progress, notes, revision flags, filters and UI preferences can be saved to Postgres through a JSON API; the UI stays instant and writes in the background (offline changes queue and retry). Design: [PRISMA_PLAN.md](PRISMA_PLAN.md), [API_IMPLEMENTATION_PLAN.md](API_IMPLEMENTATION_PLAN.md).
 
 ```bash
 cp .env.example .env            # set DATABASE_URL (and DEV_USER_ID for local dev)
@@ -57,9 +57,10 @@ npm run dev
 | `DATABASE_URL` | Pooled Postgres URL used by the app |
 | `DIRECT_URL` | Optional non-pooled URL for migrations/seed |
 | `DEV_USER_ID` | **Local development only.** Until real sign-in exists, the API treats every request as this user. Ignored (401) on Vercel / production |
-| `NEXT_PUBLIC_SYNC` | `on` = save to the server when signed in; anything else = LocalStorage only |
 
-Without a session the app falls back to **guest mode** (LocalStorage), exactly as before, and a header badge says "This device only". After first sign-in, a one-time dialog offers to move the device's progress into the account (merge, never overwrite).
+The API is required. Failed initial loads show a retry screen; there is no guest persistence. Pending writes retry in memory and do not survive closing the tab. A reload warning appears while saves are pending. Hiding or closing the problems page sends a complete keepalive preference snapshot, even when another save is in flight. Per-session sequence checks prevent older requests from overwriting it; the next browser session restores from PostgreSQL. Unsaved changes still require a working network to reach the database. Production sign-in is not implemented yet: `requireUser()` deliberately returns 401 in production until a verified session provider is added.
+
+Theme, sidebar, heatmap range problem-card layout the current problem page and scroll position are stored in `UserPreferences.ui`. Problem search, difficulty, topic, status and sorting are saved in `UserPreferences.filters` and restored on load. Ordinary navigation preserves them, including pagination and scroll position; changing filters or sorting resets to page 1, while a smaller result set clamps to its last available page; topic cards change only the topic, global search changes only its selected fields, and Clear filters preserves sorting and layout. Run `npx prisma generate` and `npx prisma migrate deploy` before starting this version. Existing browser-only data is not read or deleted; import a previously exported JSON backup through Settings if needed.
 
 API (`/api/v1`, JSON, `no-store`): `GET /progress`, `PUT|DELETE /progress/{problemId}`, `DELETE /progress` (`{"confirm":"RESET"}`), `PUT /plan`, `PATCH /preferences`, `GET /export`, `POST /import` (`replace|merge`), `POST /migrate/local`, plus public `GET /api/health`. Errors are `{ "error": { "code", "message", "fields?" } }`. Code lives in `app/api/**` (thin handlers) → `lib/server/services/*` → Prisma; the browser side is `lib/sync/*` (client, diff, queue, controller) behind `providers/tracker-provider.tsx`.
 
@@ -67,7 +68,7 @@ API (`/api/v1`, JSON, `no-store`): `GET /progress`, `PUT|DELETE /progress/{probl
 
 - All colour, shadow and glow decisions live in `app/globals.css` as semantic tokens (`--background`, `--card`, `--primary`, `--secondary`, `--success`, `--warning`, `--destructive`, `--border`, `--ring`, …) plus theme-specific `--shadow-*`, `--page-glow-*` and `--art-*` variables. Components use only token classes (`bg-card`, `text-success`, …), so there are no per-theme component copies.
 - **Dark:** `#050816` near-black navy, electric blue + neon violet, thin luminous borders, restrained glow. **Light:** `#F5F7FF` cool off-white, frosted white glass, vivid blue/violet, deep-navy text. The light palette is designed separately, not inverted.
-- **Theme:** `next-themes` (class strategy). First visit follows the OS; the choice persists in LocalStorage (`a2z-theme`); its pre-hydration script prevents a theme flash. Toggle is a keyboard-accessible `role="switch"` in the header.
+- **Theme:** class strategy; follows the OS until account preferences load, then applies the database preference. The accessible header switch saves through the preferences API.
 - **Hero artwork** (`components/dashboard/hero-art.tsx`) is inline SVG driven by `--art-*` variables: deep-space city in dark, airy dawn in light. No images, video or WebGL.
 - Motion is CSS only (short rises, progress transitions, one completion pulse) and disabled under `prefers-reduced-motion`.
 - **Motivation posters:** `public/images/*.png` are shown in a small carousel on the dashboard (`components/dashboard/poster-card.tsx`) via `next/image`, so they are resized/served as WebP instead of the 2 MB originals. Add a new poster by dropping a file in `public/images/` and adding an entry (with alt text) to `lib/posters.ts`.
@@ -87,6 +88,12 @@ API (`/api/v1`, JSON, `no-store`): `GET /progress`, `PUT|DELETE /progress/{probl
 
 ## Behaviour notes
 
-- Weekends are included; the schedule never moves when you tick things off. Pending problems from past days are flagged **Overdue**, never rescheduled.
+- Choose any problem at your own pace; there are no daily assignments, targets, scheduled dates or overdue states. Legacy plan data is retained for backup/API compatibility. Old schedule filters are normalized to all problems.
 - A streak counts days with at least one completed problem and stays alive through today until midnight.
 - Import validates the schema first, drops unknown IDs and asks before replacing; reset asks for confirmation.
+
+### Achievements
+
+The 19 milestone definitions live in `lib/achievements.ts`. `UserAchievement` stores permanent, user-scoped awards, independent of progress resets and legacy `celebratedMilestones` preferences. Completion saves and imports calculate eligibility from unique official completed problem IDs under the account row lock; the composite primary key prevents duplicate awards.
+
+Deploy with `npx prisma migrate deploy`, then run `npm run achievements:backfill` once for existing accounts. The backfill is idempotent and silent; loading a page never creates awards. New awards and notification consumption commit in the same transaction. This provides at-most-once notifications across retries and reloads: a lost response may suppress a toast, but the earned badge remains in the database and appears on the next snapshot. Imported achievements are calculated from validated completions, never trusted from a file.
