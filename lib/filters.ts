@@ -1,16 +1,7 @@
-import { isDayComplete } from "./stats";
-import type { CompletionRecord, DayPlan, Filters, Problem } from "./types";
+import type { CompletionRecord, Filters, Problem } from "./types";
 
 export interface FilterContext {
-  dayOf: ReadonlyMap<string, DayPlan>;
   completed: Record<string, CompletionRecord>;
-  today: string;
-}
-
-export function buildDayIndex(schedule: readonly DayPlan[]): Map<string, DayPlan> {
-  const m = new Map<string, DayPlan>();
-  for (const d of schedule) for (const id of d.problemIds) m.set(id, d);
-  return m;
 }
 
 export function applyFilters(problems: readonly Problem[], f: Filters, ctx: FilterContext): Problem[] {
@@ -22,14 +13,6 @@ export function applyFilters(problems: readonly Problem[], f: Filters, ctx: Filt
     if (f.status === "completed" && !done) return false;
     if (f.status === "pending" && done) return false;
     if (q && !p.title.toLowerCase().includes(q)) return false;
-    if (f.date !== "all") {
-      const day = ctx.dayOf.get(p.id);
-      if (!day) return false;
-      if (f.date === "today" && day.date !== ctx.today) return false;
-      if (f.date === "upcoming" && day.date <= ctx.today) return false;
-      if (f.date === "overdue" && !(day.date < ctx.today && !done)) return false;
-      if (f.date === "completed-days" && !isDayComplete(day, ctx.completed)) return false;
-    }
     return true;
   });
 }
@@ -59,5 +42,5 @@ export function sortProblems(
 }
 
 export function hasActiveFilters(f: Filters): boolean {
-  return f.difficulty !== "All" || f.topic !== "All" || f.status !== "all" || f.date !== "all" || f.query.trim() !== "";
+  return f.difficulty !== "All" || f.topic !== "All" || f.status !== "all" || f.query.trim() !== "";
 }
