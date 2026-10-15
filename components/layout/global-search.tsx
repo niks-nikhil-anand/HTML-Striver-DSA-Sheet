@@ -13,13 +13,12 @@ export function GlobalSearch() {
   const router = useRouter();
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
-  const { setFilters, clearFilters } = useTracker();
+  const { setFilters } = useTracker();
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
 
   const go = (patch: Parameters<typeof setFilters>[0]) => {
-    clearFilters();
     setFilters(patch);
     setOpen(false);
     router.push("/problems");
