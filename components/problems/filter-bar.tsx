@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { useTracker } from "@/hooks/use-tracker";
 import { hasActiveFilters } from "@/lib/filters";
 import { TOPICS } from "@/lib/problems";
-import type { Filters } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const selectCls =
@@ -56,7 +55,6 @@ export function FilterBar({ total }: { total: number }) {
   if (filters.difficulty !== "All") chips.push({ label: filters.difficulty, clear: () => setFilters({ difficulty: "All" }) });
   if (filters.topic !== "All") chips.push({ label: filters.topic, clear: () => setFilters({ topic: "All" }) });
   if (filters.status !== "all") chips.push({ label: filters.status === "completed" ? "Completed" : "Pending", clear: () => setFilters({ status: "all" }) });
-  if (filters.date !== "all") chips.push({ label: { today: "Today", upcoming: "Upcoming", "completed-days": "Completed days", overdue: "Overdue" }[filters.date], clear: () => setFilters({ date: "all" }) });
   if (filters.query.trim()) chips.push({ label: `“${filters.query.trim()}”`, clear: () => setFilters({ query: "" }) });
 
   return (
@@ -87,7 +85,7 @@ export function FilterBar({ total }: { total: number }) {
             options={[{ value: "all", label: "All" }, { value: "completed", label: "Completed" }, { value: "pending", label: "Pending" }]}
           />
         </div>
-        <Field label="Topic" className="lg:col-span-6">
+        <Field label="Topic" className="lg:col-span-12">
           <select className={selectCls} value={filters.topic} onChange={(e) => setFilters({ topic: e.target.value })}>
             <option value="All">All topics</option>
             {TOPICS.map((t) => (
@@ -95,15 +93,7 @@ export function FilterBar({ total }: { total: number }) {
             ))}
           </select>
         </Field>
-        <Field label="Study day" className="lg:col-span-6">
-          <select className={selectCls} value={filters.date} onChange={(e) => setFilters({ date: e.target.value as Filters["date"] })}>
-            <option value="all">Any day</option>
-            <option value="today">Today&apos;s tasks</option>
-            <option value="upcoming">Upcoming tasks</option>
-            <option value="completed-days">Completed days</option>
-            <option value="overdue">Overdue (pending)</option>
-          </select>
-        </Field>
+
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">

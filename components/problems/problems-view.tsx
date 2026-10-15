@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect } from "react";
 import { ChevronLeft, ChevronRight, LayoutGrid, List } from "lucide-react";
 import { EmptyState } from "@/components/common/empty-state";
 import { QuoteCard } from "@/components/common/quote-card";
 import { Button } from "@/components/ui/button";
+import { useProblemScroll } from "@/hooks/use-problem-scroll";
 import { useTracker } from "@/hooks/use-tracker";
 import { PROBLEMS } from "@/lib/problems";
 import { DIFFICULT_PROBLEM_QUOTES, dailyQuote } from "@/lib/quotes";
@@ -15,15 +16,27 @@ import { ProblemCard } from "./problem-card";
 const PAGE_SIZE = 20;
 
 export function ProblemsView() {
-  const { filtered, filters, setFilters, today } = useTracker();
-  const [layout, setLayout] = useState<"grid" | "list">("list");
-  const key = JSON.stringify(filters);
-  const [pg, setPg] = useState({ key, page: 0 });
-  const page = pg.key === key ? pg.page : 0; // any filter change returns to page 1
-  const setPage = (p: number) => setPg({ key, page: p });
+  const { filtered, filters, setFilters, today, progress, setUi, ready, flushSaves } = useTracker();
+  const layout = progress.prefs.ui?.problemLayout ?? "list";
+  const setLayout = (problemLayout: "grid" | "list") => setUi({ problemLayout });
+  const savedPage = progress.prefs.ui?.problemPage ?? 1;
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const cur = Math.min(page, pages - 1);
+  const page = Math.max(1, Math.min(savedPage, pages));
+  const cur = page - 1;
+  const setPage = (index: number) => setUi({ problemPage: index + 1 });
+
+  // A completion/status change can shrink the results without changing the filters.
+  // Wait for the database snapshot before correcting a now-unavailable saved page.
+  useEffect(() => {
+    if (ready && savedPage !== page) setUi({ problemPage: page });
+  }, [ready, savedPage, page, setUi]);
   const slice = filtered.slice(cur * PAGE_SIZE, (cur + 1) * PAGE_SIZE);
+  const saveScroll = useCallback((problemScrollY: number) => setUi({ problemScrollY }), [setUi]);
+  useProblemScroll({
+    ready, viewKey: JSON.stringify([filters, page, layout]),
+    savedY: progress.prefs.ui?.problemScrollY ?? 0,
+    save: saveScroll, flush: flushSaves,
+  });
 
   return (
     <div className="grid gap-4">

@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, ExternalLink, FileCode2,Link2Off, NotebookPen, RotateCcw, Trophy } from "lucide-react";
+import { memo, useState } from "react";
+import { CheckCircle2, ExternalLink, FileCode2,Link2Off, NotebookPen, RotateCcw, Trophy } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { useTracker } from "@/hooks/use-tracker";
@@ -12,17 +12,10 @@ import { cn } from "@/lib/utils";
 import { DifficultyBadge } from "@/components/common/difficulty-badge";
 
 function NoteEditor({ initial, onSave }: { initial: string; onSave: (v: string) => void }) {
-  const [text, setText] = useState(initial);
-  useEffect(() => {
-    if (text === initial) return;
-    const t = window.setTimeout(() => onSave(text), 500);
-    return () => window.clearTimeout(t);
-  }, [text, initial, onSave]);
   return (
     <Textarea
-      value={text}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => text !== initial && onSave(text)}
+      value={initial}
+      onChange={(e) => onSave(e.target.value)}
       maxLength={5000}
       rows={3}
       placeholder="Approach, edge cases, what tripped you up…"
@@ -33,12 +26,10 @@ function NoteEditor({ initial, onSave }: { initial: string; onSave: (v: string) 
 }
 
 function ProblemCardImpl({ problem, prominent = false }: { problem: Problem; prominent?: boolean }) {
-  const { progress, today, dayOf, toggleComplete, setNote, setRevision } = useTracker();
+  const { progress, toggleComplete, setNote, setRevision } = useTracker();
   const done = progress.completed[problem.id];
   const rev = progress.revision[problem.id];
   const note = progress.notes[problem.id] ?? "";
-  const day = dayOf.get(problem.id);
-  const overdue = !done && !!day && day.date < today;
   const [open, setOpen] = useState(false);
   const practiceLinks = [
     { label: "LeetCode", url: problem.leetcodeUrl },
@@ -50,7 +41,7 @@ function ProblemCardImpl({ problem, prominent = false }: { problem: Problem; pro
     <article
       className={cn(
         "rise lift group rounded-xl border bg-card/60 p-3.5 backdrop-blur-sm transition-colors sm:p-4",
-        done ? "border-success/30 bg-success/[0.04]" : overdue ? "border-destructive/40 bg-destructive/[0.04]" : "border-border hover:border-primary/40",
+        done ? "border-success/30 bg-success/[0.04]" : "border-border hover:border-primary/40",
         prominent && "p-4 sm:p-5",
       )}
     >
@@ -73,16 +64,6 @@ function ProblemCardImpl({ problem, prominent = false }: { problem: Problem; pro
             {problem.topic} <span aria-hidden>›</span> {problem.subtopic}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-            {day && (
-              <span className="text-muted-foreground">
-                {day.label} · {formatDate(day.date, { day: "numeric", month: "short" })}
-              </span>
-            )}
-            {overdue && (
-              <span className="inline-flex items-center gap-1 font-medium text-destructive">
-                <AlertTriangle className="size-3" /> Overdue
-              </span>
-            )}
             {done && (
               <span className="inline-flex items-center gap-1 text-success">
                 <CheckCircle2 className="size-3" /> Solved {formatDate(done.date, { day: "numeric", month: "short" })}
