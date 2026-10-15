@@ -27,7 +27,7 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
           <p className="text-sm font-medium">{formatDate(today)}</p>
         </div>
 
-        <div className="min-w-0 flex-1 md:max-w-md md:flex-none lg:ml-auto lg:max-w-sm xl:max-w-md">
+        <div className="relative z-30 min-w-0 flex-1 lg:ml-auto lg:max-w-md xl:max-w-lg">
           <GlobalSearch />
         </div>
 

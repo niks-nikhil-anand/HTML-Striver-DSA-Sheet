@@ -2,108 +2,130 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, ListChecks, Search } from "lucide-react";
+import { ArrowUpRight, ExternalLink, Search, X } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DifficultyBadge } from "@/components/common/difficulty-badge";
 import { useTracker } from "@/hooks/use-tracker";
-import { PROBLEMS, TOPICS } from "@/lib/problems";
+import { PROBLEMS, isSafeUrl } from "@/lib/problems";
+import { searchHighlights, searchProblems } from "@/lib/problem-search";
 import { cn } from "@/lib/utils";
 
-type Option = { key: string; kind: "topic" | "problem"; label: string; hint?: string; run: () => void };
+function Highlight({ text, query }: { text: string; query: string }) {
+  return searchHighlights(text, query).map((part, i) => part.match ? <mark key={i} className="rounded-sm bg-primary/15 text-inherit">{part.text}</mark> : part.text);
+}
 
 export function GlobalSearch() {
   const router = useRouter();
-  const listId = useId();
+  const popupId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
-  const { setFilters } = useTracker();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const focusOnOpen = useRef(false);
+  const resultRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const { setFilters, progress, toggleComplete, ready, busy, sync, retrySave } = useTracker();
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(-1);
+  const matches = useMemo(() => searchProblems(PROBLEMS, text), [text]);
+  const results = matches.slice(0, 8);
+  const showList = open && text.trim().length > 0;
 
-  const go = (patch: Parameters<typeof setFilters>[0]) => {
-    setFilters(patch);
+  const go = (query: string) => {
+    // Only explicit navigation changes the user's saved Problems-page filters.
+    // Clear restrictive filters so every suggested result remains visible.
+    setFilters({ query, topic: "All", difficulty: "All", status: "all" });
     setOpen(false);
     router.push("/problems");
   };
-
-  const options = useMemo<Option[]>(() => {
-    const q = text.trim().toLowerCase();
-    if (!q) return [];
-    const topics = TOPICS.filter((t) => t.toLowerCase().includes(q)).slice(0, 4);
-    const probs = PROBLEMS.filter((p) => p.title.toLowerCase().includes(q)).slice(0, 6);
-    return [
-      ...topics.map<Option>((t) => ({ key: `t-${t}`, kind: "topic", label: t, hint: "Topic", run: () => go({ topic: t }) })),
-      ...probs.map<Option>((p) => ({ key: p.id, kind: "problem", label: p.title, hint: p.topic, run: () => go({ query: p.title }) })),
-    ];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text]);
+  const focusResult = (index: number) => {
+    if (index < 0) { setActive(-1); inputRef.current?.focus(); return; }
+    const target = Math.min(index, results.length - 1);
+    setActive(target);
+    resultRefs.current[target]?.focus();
+  };
 
   useEffect(() => {
-    const onDown = (e: MouseEvent) => !rootRef.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    if (showList && focusOnOpen.current) {
+      focusOnOpen.current = false;
+      resultRefs.current[0]?.focus();
+    }
+  }, [showList]);
+
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
   }, []);
 
-  const showList = open && text.trim().length > 0;
-
   return (
-    <div ref={rootRef} className="relative w-full">
-      <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+    <div
+      ref={rootRef}
+      className={cn("relative ml-auto w-full transition-[width] duration-200 motion-reduce:transition-none lg:w-[78%] lg:hover:w-full lg:focus-within:w-full", open && "lg:w-full")}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}
+      onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); inputRef.current?.focus(); setOpen(false); } }}
+    >
+      <Search className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />
       <input
+        ref={inputRef}
         type="search"
         role="combobox"
         aria-expanded={showList}
-        aria-controls={listId}
+        aria-controls={showList ? popupId : undefined}
+        aria-haspopup="grid"
         aria-autocomplete="list"
-        aria-activedescendant={showList && options[active] ? `${listId}-${active}` : undefined}
         aria-label="Search problems and topics"
+        autoComplete="off"
         placeholder="Search problems or topics…"
         value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          setOpen(true);
-          setActive(0);
-        }}
+        onChange={(event) => { setText(event.target.value); setOpen(true); setActive(-1); }}
         onFocus={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") return setOpen(false);
-          if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, options.length - 1)); }
-          if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-          if (e.key === "Enter" && text.trim()) {
-            e.preventDefault();
-            if (options[active]) options[active].run();
-            else go({ query: text.trim() });
+        onClick={() => setOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            if (showList && results.length) focusResult(0);
+            else { focusOnOpen.current = results.length > 0; setOpen(true); }
           }
+          if (event.key === "Enter" && text.trim()) { event.preventDefault(); go(text.trim()); }
         }}
-        className="h-10 w-full rounded-xl border border-input bg-card/60 pl-9 pr-3 text-sm text-foreground backdrop-blur placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+        className="h-10 w-full rounded-xl border border-input bg-card/60 pl-9 pr-10 text-sm text-foreground backdrop-blur placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:appearance-none"
       />
+      {text && <button type="button" aria-label="Clear global search" onClick={() => { setText(""); setOpen(false); setActive(-1); inputRef.current?.focus(); }} className="absolute right-0 top-0 grid size-10 place-items-center rounded-xl text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><X aria-hidden className="size-4" /></button>}
       {showList && (
-        <ul
-          id={listId}
-          role="listbox"
-          className="glass absolute z-40 mt-2 max-h-80 w-full overflow-auto rounded-xl bg-popover p-1.5 shadow-xl"
-          style={{ background: "var(--popover)" }}
-        >
-          {options.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-muted-foreground">
-              No matches. Press Enter to search problems for &ldquo;{text.trim()}&rdquo;.
-            </li>
-          ) : (
-            options.map((o, i) => (
-              <li
-                key={o.key}
-                id={`${listId}-${i}`}
-                role="option"
-                aria-selected={i === active}
-                onMouseEnter={() => setActive(i)}
-                onMouseDown={(e) => { e.preventDefault(); o.run(); }}
-                className={cn("flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm", i === active ? "bg-accent text-foreground" : "text-foreground/85")}
-              >
-                {o.kind === "topic" ? <BookOpen className="size-4 shrink-0 text-secondary" /> : <ListChecks className="size-4 shrink-0 text-primary" />}
-                <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{o.hint}</span>
-              </li>
-            ))
-          )}
-        </ul>
+        <div className="fixed left-3 right-3 top-[4.25rem] z-40 flex max-h-[min(70dvh,36rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2 sm:w-full sm:min-w-[min(26rem,calc(100vw-1.5rem))]">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+            <p role="status" className="text-xs text-muted-foreground">{matches.length} matching {matches.length === 1 ? "problem" : "problems"}{matches.length > 8 ? " · Top 8" : ""}</p>
+            <span className="hidden text-[10px] text-muted-foreground sm:inline">↓ Navigate · Esc Close</span>
+          </div>
+          {results.length ? (
+            <div id={popupId} role="grid" aria-label="Suggested problems" className="min-h-0 overflow-y-auto overscroll-contain p-1.5"
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); focusResult(active + (event.key === "ArrowDown" ? 1 : -1)); }
+              }}>
+              {results.map((problem, index) => {
+                const done = !!progress.completed[problem.id];
+                return (
+                  <div key={problem.id} role="row" className={cn("flex items-center gap-1 rounded-lg px-1.5 py-1", active === index ? "bg-accent" : "hover:bg-accent/60")}>
+                    <div role="gridcell" className="grid size-10 shrink-0 place-items-center"><Checkbox checked={done} disabled={!ready || busy} onFocus={() => setActive(index)} onCheckedChange={() => toggleComplete(problem.id)} aria-label={`Mark "${problem.title}" ${done ? "incomplete" : "complete"} from search`} className="size-5" /></div>
+                    <div role="gridcell" className="min-w-0 flex-1">
+                      <button type="button" ref={(element) => { resultRefs.current[index] = element; }} onFocus={() => setActive(index)} onClick={() => go(problem.title)} className="grid min-h-14 w-full gap-1 rounded-md py-1.5 pr-1 text-left focus-visible:outline-2 focus-visible:outline-ring">
+                        <span className={cn("text-sm font-medium leading-snug", done && "text-muted-foreground")}><Highlight text={problem.title} query={text} /></span>
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground"><span><Highlight text={problem.topic} query={text} /></span><DifficultyBadge difficulty={problem.difficulty} />{done && <span className="text-success">Completed</span>}</span>
+                      </button>
+                    </div>
+                    <div role="gridcell" className="shrink-0">{isSafeUrl(problem.url) && <a href={problem.url} target="_blank" rel="noopener noreferrer" aria-label={`Practice "${problem.title}" in a new tab`} onFocus={() => setActive(index)} className="grid size-10 place-items-center rounded-lg text-muted-foreground hover:bg-primary/10 hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"><ExternalLink aria-hidden className="size-4" /></a>}</div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : <div id={popupId} role="grid" aria-label="Suggested problems" className="px-4 py-6"><div role="row"><p role="gridcell" className="text-sm text-muted-foreground">No matching problems. Try a title or topic such as “binary search”.</p></div></div>}
+          <div className="shrink-0 border-t border-border">
+            <div role="status" className="flex items-center justify-between gap-2 px-3 pt-2 text-[11px] text-muted-foreground">
+              <span>{sync.state === "offline" ? "Offline · changes are not saved yet" : sync.state === "error" ? "Some changes couldn’t be saved" : sync.pending > 0 ? "Saving changes…" : "All changes saved"}</span>
+              {(sync.state === "offline" || sync.state === "error") && <button type="button" onClick={retrySave} className="min-h-8 rounded px-2 font-medium text-primary underline focus-visible:outline-2 focus-visible:outline-ring">Retry saving</button>}
+            </div>
+            <button type="button" onClick={() => go(text.trim())} className="flex min-h-11 w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-primary hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"><span>View all results for “{text.trim()}”</span><ArrowUpRight aria-hidden className="size-4 shrink-0" /></button>
+          </div>
+        </div>
       )}
     </div>
   );

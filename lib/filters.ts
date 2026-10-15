@@ -1,3 +1,4 @@
+import { matchesProblem } from "./problem-search";
 import type { CompletionRecord, Filters, Problem } from "./types";
 
 export interface FilterContext {
@@ -12,7 +13,7 @@ export function applyFilters(problems: readonly Problem[], f: Filters, ctx: Filt
     const done = !!ctx.completed[p.id];
     if (f.status === "completed" && !done) return false;
     if (f.status === "pending" && done) return false;
-    if (q && !p.title.toLowerCase().includes(q)) return false;
+    if (q && !matchesProblem(p, q)) return false;
     return true;
   });
 }
