@@ -1,4 +1,4 @@
-import { BarChart3, BookOpenCheck, CalendarDays, LayoutDashboard, ListChecks, RotateCcw, Settings, type LucideIcon } from "lucide-react";
+import { Trophy, BarChart3, BookOpenCheck, LayoutDashboard, ListChecks, RotateCcw, Settings, type LucideIcon } from "lucide-react";
 
 export interface NavItem {
   href: string;
@@ -8,10 +8,10 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/plan", label: "Daily Plan", icon: CalendarDays },
   { href: "/problems", label: "All Problems", icon: ListChecks },
   { href: "/topics", label: "Topics", icon: BookOpenCheck },
   { href: "/revision", label: "Revision", icon: RotateCcw },
+  { href: "/milestones", label: "Milestones", icon: Trophy },
   { href: "/stats", label: "Statistics & Analytics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

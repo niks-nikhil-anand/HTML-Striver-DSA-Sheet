@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { CalendarDays, Flame, Menu } from "lucide-react";
+import { NavbarAchievements } from "@/components/achievements/navbar-achievements";
+import { Flame, Menu } from "lucide-react";
 import { useTracker } from "@/hooks/use-tracker";
 import { formatDate } from "@/lib/dates";
 import { GlobalSearch } from "./global-search";
@@ -9,8 +9,7 @@ import { SyncIndicator } from "./sync-indicator";
 import { ThemeToggle } from "./theme-toggle";
 
 export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
-  const { today, todayPlan, todayIndex, schedule, streaks } = useTracker();
-  const dayBadge = todayPlan ? todayPlan.label : todayIndex < 0 ? "Not started" : "Plan done";
+  const { today, streaks } = useTracker();
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center gap-2 px-3 py-2.5 sm:gap-3 sm:px-6">
@@ -33,13 +32,7 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <Link
-            href="/plan"
-            title={todayPlan ? `${todayPlan.label} of ${schedule.length}` : undefined}
-            className="hidden items-center gap-1.5 rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 text-xs font-medium text-primary sm:inline-flex"
-          >
-            <CalendarDays className="size-3.5" /> {dayBadge}
-          </Link>
+          <NavbarAchievements />
           <span
             className="hidden items-center gap-1.5 rounded-xl border border-warning/35 bg-warning/10 px-3 py-2 text-xs font-medium text-warning md:inline-flex"
             title="Current study streak"
