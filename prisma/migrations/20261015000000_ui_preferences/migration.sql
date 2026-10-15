@@ -1,0 +1,1 @@
+ALTER TABLE "UserPreferences" ADD COLUMN "ui" JSONB NOT NULL DEFAULT '{}';
