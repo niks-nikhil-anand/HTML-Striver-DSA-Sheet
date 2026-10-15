@@ -265,3 +265,26 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* Calendar intensity is shared by day cells and the legend in both themes. */
+.activity-cell { background: var(--activity-0); border: 1px solid var(--activity-border); }
+.activity-cell[data-level="1"] { background: var(--activity-1); }
+.activity-cell[data-level="2"] { background: var(--activity-2); }
+.activity-cell[data-level="3"] { background: var(--activity-3); }
+.activity-cell[data-level="4"] { background: var(--activity-4); }
+:root {
+  --activity-0: #e8ecf4;
+  --activity-1: #b1dfc1;
+  --activity-2: #6cc58d;
+  --activity-3: #299d64;
+  --activity-4: #11633d;
+  --activity-border: rgb(15 70 45 / 0.12);
+}
+.dark {
+  --activity-0: #17233a;
+  --activity-1: #124834;
+  --activity-2: #176e45;
+  --activity-3: #24a36a;
+  --activity-4: #4cdb97;
+  --activity-border: rgb(125 200 170 / 0.12);
+}

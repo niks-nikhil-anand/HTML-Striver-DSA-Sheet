@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Dashboard" };
 export default function Page() {
   return (
     <>
-      <PageHeader title="Dashboard" showJump={false} srOnly />
+      <PageHeader title="Dashboard" srOnly />
       <DashboardView />
     </>
   );
