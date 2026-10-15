@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Settings" };
 export default function Page() {
   return (
     <>
-      <PageHeader title="Settings" showJump={false} />
+      <PageHeader title="Settings" />
       <SettingsView />
     </>
   );
