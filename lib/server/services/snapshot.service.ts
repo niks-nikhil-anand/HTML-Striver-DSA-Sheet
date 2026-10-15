@@ -8,10 +8,11 @@ import { getPreferences } from "./preferences.service";
 
 /** The user's whole state in the SAME shape the frontend already uses (`Progress`), plus row timestamps. */
 export async function getSnapshot(userId: string): Promise<SnapshotDTO> {
-  const [plan, prefs, rows] = await Promise.all([
+  const [plan, prefs, rows, achievements] = await Promise.all([
     getOrCreatePlan(userId),
     getPreferences(userId),
     db.problemProgress.findMany({ where: { userId } }),
+    db.userAchievement.findMany({ where: { userId } }),
   ]);
 
   const progress: Progress = { version: 1, startDate: plan.startDate, completed: {}, notes: {}, revision: {}, prefs };
@@ -23,5 +24,5 @@ export async function getSnapshot(userId: string): Promise<SnapshotDTO> {
     const rev = fromDbRevision(r.revision);
     if (rev) progress.revision[r.problemId] = rev;
   }
-  return { ...progress, rowUpdatedAt };
+  return { ...progress, rowUpdatedAt, achievements: achievements.map((a) => ({ tag: a.tag, unlockedAt: a.unlockedAt.toISOString() })) };
 }
