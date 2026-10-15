@@ -31,7 +31,7 @@ const filtersPatch = z
     difficulty: z.enum(["All", "Easy", "Medium", "Hard"]),
     topic: z.string().min(1).max(100),
     status: z.enum(["all", "completed", "pending"]),
-    date: z.enum(["all", "today", "upcoming", "completed-days", "overdue"]),
+    date: z.enum(["all", "today", "upcoming", "completed-days", "overdue"]).transform(() => "all" as const),
     query: z.string().max(200),
     sort: z.enum(["schedule", "title", "difficulty", "topic", "status"]),
   })
@@ -40,11 +40,13 @@ const filtersPatch = z
 
 export const patchPreferencesSchema = z
   .object({
+    mutation: z.object({ sessionId: z.uuid(), sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
+    ui: z.object({ problemScrollY: z.number().int().min(0).max(1_000_000).optional(), problemPage: z.number().int().min(1).max(10_000).optional(), problemLayout: z.enum(["grid", "list"]).optional(), theme: z.enum(["system", "light", "dark"]).optional(), sidebarCollapsed: z.boolean().optional(), activityRange: z.enum(["year", "30d", "7d"]).optional() }).strict().optional(),
     filters: filtersPatch.optional(),
     celebratedMilestones: z.array(z.number().int().min(1).max(10_000)).max(50).optional(),
   })
   .strict()
-  .refine((b) => b.filters !== undefined || b.celebratedMilestones !== undefined, { message: "Nothing to update" });
+  .refine((b) => b.ui !== undefined || b.filters !== undefined || b.celebratedMilestones !== undefined, { message: "Nothing to update" });
 
 export const importSchema = z.object({ mode: z.enum(["replace", "merge"]), data: z.unknown() }).strict();
 export const migrateSchema = z.object({ data: z.unknown() }).strict();
