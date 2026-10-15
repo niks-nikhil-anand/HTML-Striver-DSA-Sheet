@@ -12,11 +12,9 @@ export interface QueueOptions {
   send: (op: SyncOp) => Promise<unknown>;
   onStatus?: (s: SyncStatus) => void;
   /** A non-retryable 4xx: the op was dropped; revert/notify. */
-  onRejected?: (op: SyncOp, err: ApiClientError) => void;
+  onRejected?: (op: SyncOp, err: ApiClientError) => void | Promise<void>;
   /** 409: the server copy is newer; the op was dropped. */
-  onConflict?: (op: SyncOp, err: ApiClientError) => void;
-  storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
-  storageKey?: string;
+  onConflict?: (op: SyncOp, err: ApiClientError) => void | Promise<void>;
   debounceMs?: { note: number; prefs: number };
   retryDelaysMs?: number[];
 }
@@ -29,12 +27,13 @@ const DEFAULT_RETRY = [1_000, 2_000, 5_000, 15_000, 30_000];
  * - Debounces notes and preferences; ticks go out immediately.
  * - Sends one op at a time so per-problem ordering is preserved.
  * - Retries network/5xx failures with backoff; drops (and reports) other 4xx and 409.
- * - Persists unsent ops so a closed tab does not lose them.
+ * - Holds pending edits in memory only; a reload discards unsaved changes.
  */
 export class SyncQueue {
   private map = new Map<string, { op: SyncOp; readyAt: number }>();
   private inflight: SyncOp | null = null;
   private running = false;
+  private destroyed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private attempts = 0;
   private blockedUntil = 0;
@@ -45,32 +44,14 @@ export class SyncQueue {
     this.o = { debounceMs: { note: 500, prefs: 1_000 }, retryDelaysMs: DEFAULT_RETRY, ...opts };
   }
 
-  /** Load ops persisted by a previous session. Returns them (so callers can replay them onto a snapshot). */
-  restore(): SyncOp[] {
-    const { storage, storageKey } = this.o;
-    if (!storage || !storageKey) return [];
-    try {
-      const raw = storage.getItem(storageKey);
-      const ops = raw ? (JSON.parse(raw) as SyncOp[]) : [];
-      if (!Array.isArray(ops)) return [];
-      for (const op of ops) this.put(op, 0);
-      this.persist();
-      this.emit();
-      this.schedule();
-      return ops;
-    } catch {
-      return [];
-    }
-  }
-
   pendingOps(): SyncOp[] {
     return [...(this.inflight ? [this.inflight] : []), ...[...this.map.values()].map((e) => e.op)];
   }
 
   enqueue(op: SyncOp): void {
-    const delay = op.kind === "prefs" ? this.o.debounceMs.prefs : op.kind === "row" && op.body.note !== undefined && op.body.completed === undefined ? this.o.debounceMs.note : 0;
+    const delay = op.kind === "prefs" ? (op.filters?.query !== undefined && !op.ui ? this.o.debounceMs.prefs : 0) : op.kind === "row" && op.body.note !== undefined && op.body.completed === undefined ? this.o.debounceMs.note : 0;
     this.put(op, delay);
-    this.persist();
+    this.state = "saving";
     this.emit();
     this.schedule();
   }
@@ -80,7 +61,7 @@ export class SyncQueue {
     this.attempts = 0;
     this.blockedUntil = 0;
     for (const e of this.map.values()) e.readyAt = 0;
-    this.schedule();
+    if (!this.destroyed && !this.running) void this.pump();
   }
 
   /** Drop everything (sign-out, reset, replace). */
@@ -89,12 +70,12 @@ export class SyncQueue {
     this.inflight = null;
     this.attempts = 0;
     this.blockedUntil = 0;
-    this.persist();
     this.state = "idle";
     this.emit();
   }
 
   destroy(): void {
+    this.destroyed = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -115,20 +96,8 @@ export class SyncQueue {
     this.o.onStatus?.(this.status());
   }
 
-  private persist() {
-    const { storage, storageKey } = this.o;
-    if (!storage || !storageKey) return;
-    try {
-      const ops = this.pendingOps();
-      if (ops.length === 0) storage.removeItem(storageKey);
-      else storage.setItem(storageKey, JSON.stringify(ops));
-    } catch {
-      /* storage full/unavailable: the queue still works in memory */
-    }
-  }
-
   private schedule() {
-    if (this.running || this.map.size === 0) return;
+    if (this.destroyed || this.running || this.map.size === 0) return;
     if (this.timer) clearTimeout(this.timer);
     const soonest = Math.min(...[...this.map.values()].map((e) => e.readyAt));
     const wait = Math.max(0, Math.max(soonest, this.blockedUntil) - Date.now());
@@ -140,7 +109,7 @@ export class SyncQueue {
     this.running = true;
     this.timer = null;
     try {
-      while (true) {
+      while (!this.destroyed) {
         const now = Date.now();
         if (now < this.blockedUntil) break;
         const next = [...this.map.entries()].filter(([, e]) => e.readyAt <= now).sort((a, b) => a[1].readyAt - b[1].readyAt)[0];
@@ -168,16 +137,14 @@ export class SyncQueue {
             this.state = "offline";
             break;
           }
-          if (err.code === "CONFLICT") this.o.onConflict?.(entry.op, err);
-          else this.o.onRejected?.(entry.op, err);
+          if (err.code === "CONFLICT") await this.o.onConflict?.(entry.op, err);
+          else await this.o.onRejected?.(entry.op, err);
           this.state = "error";
         }
-        this.persist();
         this.emit();
       }
     } finally {
       this.running = false;
-      this.persist();
       if (this.map.size === 0 && this.state !== "error" && this.state !== "offline") this.state = "idle";
       this.emit();
       this.schedule();

@@ -1,11 +1,11 @@
 import type { PutProgressBody } from "@/lib/api-types";
-import type { Filters, Progress } from "@/lib/types";
+import type { Filters, Progress, UiPreferences } from "@/lib/types";
 
 /** A unit of change to send to the server. Row ops are keyed by problem id and coalesce. */
 export type SyncOp =
   | { kind: "row"; problemId: string; body: PutProgressBody }
   | { kind: "plan"; startDate: string }
-  | { kind: "prefs"; filters?: Partial<Filters>; celebratedMilestones?: number[] };
+  | { kind: "prefs"; ui?: Partial<UiPreferences>; filters?: Partial<Filters>; celebratedMilestones?: number[] };
 
 /** Compare two states and emit the minimal ops that turn `prev` into `next`. */
 export function diffProgress(prev: Progress, next: Progress): SyncOp[] {
@@ -38,9 +38,11 @@ export function diffProgress(prev: Progress, next: Progress): SyncOp[] {
     if (prev.prefs.filters[k] !== next.prefs.filters[k]) (filters as Record<string, unknown>)[k] = next.prefs.filters[k];
   }
   const milestonesChanged = JSON.stringify(prev.prefs.celebratedMilestones) !== JSON.stringify(next.prefs.celebratedMilestones);
-  if (Object.keys(filters).length > 0 || milestonesChanged) {
+  const uiChanged = JSON.stringify(prev.prefs.ui) !== JSON.stringify(next.prefs.ui);
+  if (Object.keys(filters).length > 0 || milestonesChanged || uiChanged) {
     ops.push({
       kind: "prefs",
+      ...(uiChanged ? { ui: next.prefs.ui } : {}),
       ...(Object.keys(filters).length > 0 ? { filters } : {}),
       ...(milestonesChanged ? { celebratedMilestones: next.prefs.celebratedMilestones } : {}),
     });
@@ -56,6 +58,7 @@ export function applyOp(p: Progress, op: SyncOp, now = Date.now()): Progress {
       ...p,
       prefs: {
         ...p.prefs,
+        ui: { theme: "system", sidebarCollapsed: false, ...p.prefs.ui, ...op.ui },
         filters: { ...p.prefs.filters, ...op.filters },
         celebratedMilestones: op.celebratedMilestones ?? p.prefs.celebratedMilestones,
       },
@@ -84,6 +87,7 @@ export function mergeOps(a: SyncOp, b: SyncOp): SyncOp {
   if (a.kind === "prefs" && b.kind === "prefs") {
     return {
       kind: "prefs",
+      ...(a.ui || b.ui ? { ui: { ...a.ui, ...b.ui } } : {}),
       ...(a.filters || b.filters ? { filters: { ...a.filters, ...b.filters } } : {}),
       ...(a.celebratedMilestones || b.celebratedMilestones ? { celebratedMilestones: b.celebratedMilestones ?? a.celebratedMilestones } : {}),
     };
