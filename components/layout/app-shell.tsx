@@ -8,7 +8,7 @@ import { MobileDrawer } from "./mobile-drawer";
 import { Sidebar } from "./sidebar";
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { ready, loadError, retryLoad, progress, setUi, busy } = useTracker();
+  const { ready, loadError, retryLoad, sync, progress, setUi, busy } = useTracker();
   const collapsed = progress.prefs.ui?.sidebarCollapsed ?? false;
   const setCollapsed = (value: boolean) => setUi({ sidebarCollapsed: value });
   const [drawer, setDrawer] = useState(false);
@@ -21,7 +21,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
             {!loadError && <span className="size-9 animate-spin rounded-full border-2 border-muted border-t-primary" />}
             {loadError ?? "Loading your progress…"}
-            {loadError && <button onClick={retryLoad} className="underline">Retry loading</button>}
+            {loadError && (sync.mode === "unauthenticated" ? <a href={`/unlock?next=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname + window.location.search : "/")}`} className="underline">Unlock tracker</a> : <button onClick={retryLoad} className="underline">Retry loading</button>)}
           </div>
         </div>
       )}

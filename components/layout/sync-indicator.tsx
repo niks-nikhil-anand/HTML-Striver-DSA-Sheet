@@ -14,7 +14,7 @@ export function SyncIndicator() {
   let tone = "text-success border-success/35 bg-success/10";
 
   if (sync.mode === "unauthenticated") {
-    label = "Sign in required";
+    label = "Tracker locked";
     tone = "text-destructive";
   } else if (sync.mode === "unknown") {
     icon = <Loader2 className="size-3.5 animate-spin" />;

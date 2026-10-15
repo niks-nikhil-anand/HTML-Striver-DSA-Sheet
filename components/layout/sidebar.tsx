@@ -1,5 +1,6 @@
 "use client";
 
+import { LockButton } from "@/components/auth/lock-button";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
@@ -99,6 +100,8 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
       </div>
 
       <div className="mt-auto grid gap-3">
+        <div className="hidden lg:block"><LockButton compact={collapsed} /></div>
+        <div className="lg:hidden"><LockButton compact /></div>
         {labelsOnLg && (
           <div className="hidden lg:block">
             <MotivationCard />

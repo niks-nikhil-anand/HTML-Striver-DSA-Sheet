@@ -39,7 +39,7 @@ export class SyncController {
           ev.onMode(this.mode);
           this.queue.clear();
         }
-        ev.notify("error", err.status === 401 ? "Your session expired. Sign in and reload to continue." : err.message);
+        ev.notify("error", err.status === 401 ? "Your session expired. Unlock your tracker to continue." : err.message);
         if (err.status !== 401) this.rejected.set(opKey(op), op);
       },
       onConflict: async () => {
@@ -132,5 +132,11 @@ export class SyncController {
   }
   importReplace(p: Progress) { return this.runExclusive(async () => { const result = await api.importData("replace", p); if (!this.destroyed && result.achievements) this.ev.onAchievements?.(result.achievements, result.newAchievements ?? []); }); }
   reset() { return this.runExclusive(() => api.resetAll()); }
+  async lock() {
+    if (this.exclusive || this.mode !== "synced") throw new Error("Wait for the current operation before locking.");
+    this.exclusive = true;
+    try { await this.drain(); await api.lock(); this.destroy(); }
+    finally { this.exclusive = false; }
+  }
   async exportText() { await this.drain(); return api.exportText(); }
 }

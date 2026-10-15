@@ -7,7 +7,7 @@ import { SyncController } from "../controller";
 
 vi.mock("../api-client", async (original) => {
   const actual = await original<typeof import("../api-client")>();
-  return { ...actual, api: { getSnapshot: vi.fn(), putProgress: vi.fn(), putPlan: vi.fn(), patchPreferences: vi.fn(), importData: vi.fn(), resetAll: vi.fn(), exportText: vi.fn() } };
+  return { ...actual, api: { lock: vi.fn(), getSnapshot: vi.fn(), putProgress: vi.fn(), putPlan: vi.fn(), patchPreferences: vi.fn(), importData: vi.fn(), resetAll: vi.fn(), exportText: vi.fn() } };
 });
 const snapshot = (): SnapshotDTO => ({ ...defaultProgress(), rowUpdatedAt: {} });
 function setup() {
@@ -150,6 +150,24 @@ describe("API persistence", () => {
     finish({ updatedAt: "2026-10-15T12:00:00Z", achievements: earned, newAchievements: earned } as never);
     await vi.advanceTimersByTimeAsync(0);
     expect(ev.onAchievements).not.toHaveBeenCalled();
+  });
+
+  it("saves pending changes before locking without refreshing after logout", async () => {
+    const { controller } = setup(); await controller.start();
+    let finish!: (value: never) => void;
+    vi.mocked(api.putProgress).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const next = defaultProgress(); next.notes[PROBLEMS[0].id] = "Keep before lock";
+    controller.track(defaultProgress(), next); await vi.advanceTimersByTimeAsync(500);
+    const locking = controller.lock(); expect(api.lock).not.toHaveBeenCalled();
+    finish({ updatedAt: "2026-10-15T00:00:00Z" } as never); await vi.advanceTimersByTimeAsync(25); await locking;
+    expect(api.lock).toHaveBeenCalledOnce(); expect(api.getSnapshot).toHaveBeenCalledOnce();
+  });
+  it("keeps the tracker unlocked if pending saves cannot be drained", async () => {
+    const { controller } = setup(); await controller.start();
+    vi.mocked(api.putProgress).mockRejectedValueOnce(new ApiClientError("VALIDATION",400,"Rejected"));
+    const next = defaultProgress(); next.notes[PROBLEMS[0].id] = "Unsaved";
+    controller.track(defaultProgress(),next); await vi.advanceTimersByTimeAsync(500);
+    await expect(controller.lock()).rejects.toThrow("Retry saving"); expect(api.lock).not.toHaveBeenCalled(); controller.destroy();
   });
 
 });

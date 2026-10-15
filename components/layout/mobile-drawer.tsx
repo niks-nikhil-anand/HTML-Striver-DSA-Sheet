@@ -1,5 +1,6 @@
 "use client";
 
+import { LockButton } from "@/components/auth/lock-button";
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -52,7 +53,8 @@ export function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => 
           </button>
         </div>
         <NavList onNavigate={onClose} />
-        <div className="mt-auto">
+        <div className="mt-auto grid gap-3">
+          <LockButton />
           <MotivationCard />
         </div>
       </aside>

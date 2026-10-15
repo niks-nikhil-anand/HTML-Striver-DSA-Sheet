@@ -48,6 +48,7 @@ model User {
   progress    ProblemProgress[]
   events      CompletionEvent[]
   achievements UserAchievement[]
+  ownerSessions OwnerSession[]
 }
 
 // ---------------------------------------------------------------------------
@@ -150,4 +151,21 @@ model UserAchievement {
   notifiedAt DateTime?
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@id([userId, tag])
+}
+
+model OwnerSession {
+  id String @id
+  userId String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+}
+
+model PinAttempt {
+  key String @id
+  failures Int @default(0)
+  lockouts Int @default(0)
+  blockedUntil DateTime?
+  updatedAt DateTime @updatedAt
 }

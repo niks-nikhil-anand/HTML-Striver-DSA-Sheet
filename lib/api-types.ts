@@ -4,6 +4,7 @@ import type { Progress, RevisionStatus } from "./types";
 /** Shared by the API handlers and the browser client (no server imports here). */
 
 export type ApiErrorCode =
+  | "RATE_LIMITED"
   | "VALIDATION"
   | "UNAUTHENTICATED"
   | "FORBIDDEN"
@@ -13,7 +14,7 @@ export type ApiErrorCode =
   | "INTERNAL";
 
 export interface ApiErrorBody {
-  error: { code: ApiErrorCode; message: string; fields?: Record<string, string>; current?: ProgressRowDTO };
+  error: { code: ApiErrorCode; message: string; retryAfter?: number; fields?: Record<string, string>; current?: ProgressRowDTO };
 }
 
 /** One problem's saved state. */

@@ -44,6 +44,7 @@ export interface TrackerValue {
   clearFilters: () => void;
   replaceProgress: (p: Progress) => Promise<void>;
   resetProgress: () => Promise<void>;
+  lockTracker: () => Promise<void>;
 }
 
 export const TrackerContext = createContext<TrackerValue | null>(null);
@@ -85,7 +86,7 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
         }
       },
       apply: (p) => { if (active) { ref.current = p; setProgress(p); } },
-      onMode: (mode) => { if (active) { setSyncMode(mode); if (mode === "unknown") { setReady(false); setLoadError("Unable to load saved progress. Retry when connected."); } if (mode === "unauthenticated") { setReady(false); setLoadError("Sign in required. Production authentication must be configured before using the tracker."); } } },
+      onMode: (mode) => { if (active) { setSyncMode(mode); if (mode === "unknown") { setReady(false); setLoadError("Unable to load saved progress. Retry when connected."); } if (mode === "unauthenticated") { setReady(false); setLoadError("Your tracker is locked. Unlock it to continue."); } } },
       onStatus: (s) => { if (active) setSyncState(s); },
       notify: (kind, message) => kind === "error" ? toast.error(message) : toast(message),
     });
@@ -210,6 +211,7 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
     try { await action(c); } finally { busyRef.current = false; setBusy(false); }
   }, []);
   const replaceProgress = useCallback(async (p: Progress) => { await exclusive((c) => c.importReplace(p)); }, [exclusive]);
+  const lockTracker = useCallback(async () => { await exclusive((c) => c.lock()); }, [exclusive]);
   const resetProgress = useCallback(async () => { await exclusive((c) => c.reset()); }, [exclusive]);
   const exportData = useCallback(async () => {
     const c = controllerRef.current;
@@ -236,7 +238,7 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
     achievements, highlightedAchievement, ready, progress, today, problemById, overall, streaks, topics,
     filters, filtered, loadError, retryLoad: () => setAttempt((v) => v + 1), retrySave: () => controllerRef.current?.retry(), flushSaves: () => controllerRef.current?.flushOnExit(ref.current), busy, setUi,
     sync: { enabled: true, mode: syncMode, ...syncState }, exportData,
-    toggleComplete, setNote, setRevision, setFilters, clearFilters, replaceProgress, resetProgress,
+    toggleComplete, setNote, setRevision, setFilters, clearFilters, replaceProgress, resetProgress, lockTracker,
   };
   return <TrackerContext.Provider value={value}>{children}</TrackerContext.Provider>;
 }

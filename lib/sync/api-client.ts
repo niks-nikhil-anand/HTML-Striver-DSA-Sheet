@@ -61,6 +61,7 @@ function preferenceMutation() {
 }
 
 export const api = {
+  lock: () => call<void>("/auth/lock", { method: "POST" }),
   getSnapshot: () => call<SnapshotDTO>("/progress"),
   putProgress: (problemId: string, body: PutProgressBody) => call<ProgressRowDTO>(`/progress/${encodeURIComponent(problemId)}`, { method: "PUT", json: body }),
   putPlan: (startDate: string) => call<{ startDate: string }>("/plan", { method: "PUT", json: { startDate } }),

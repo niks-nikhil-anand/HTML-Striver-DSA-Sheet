@@ -2,6 +2,7 @@ import { ZodError } from "zod";
 import type { ApiErrorBody, ApiErrorCode, ProgressRowDTO } from "@/lib/api-types";
 
 const STATUS: Record<ApiErrorCode, number> = {
+  RATE_LIMITED: 429,
   VALIDATION: 400,
   UNAUTHENTICATED: 401,
   FORBIDDEN: 403,
@@ -16,7 +17,7 @@ export class ApiError extends Error {
   constructor(
     readonly code: ApiErrorCode,
     message: string,
-    readonly extra: { fields?: Record<string, string>; current?: ProgressRowDTO } = {},
+    readonly extra: { retryAfter?: number; fields?: Record<string, string>; current?: ProgressRowDTO } = {},
   ) {
     super(message);
     this.status = STATUS[code];
@@ -45,5 +46,5 @@ export function toErrorResponse(err: unknown): Response {
     status = 500;
     body = { error: { code: "INTERNAL", message: "Something went wrong" } };
   }
-  return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+  return Response.json(body, { status, headers: { "Cache-Control": "no-store", ...(err instanceof ApiError && err.extra.retryAfter ? { "Retry-After": String(err.extra.retryAfter) } : {}) } });
 }
