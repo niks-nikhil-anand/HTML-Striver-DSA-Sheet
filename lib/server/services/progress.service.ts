@@ -1,4 +1,5 @@
 import "server-only";
+import { awardAchievements } from "./achievements.service";
 import type { ProgressRowDTO, PutProgressBody } from "@/lib/api-types";
 import { diffDays } from "@/lib/dates";
 import { db } from "../db";
@@ -23,6 +24,7 @@ export async function putProgress(userId: string, problemId: string, body: PutPr
 
   return db.$transaction(
     async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
       const existing = await tx.problemProgress.findUnique({ where: { userId_problemId: { userId, problemId } } });
 
       if (body.clientUpdatedAt && existing && existing.updatedAt.getTime() > new Date(body.clientUpdatedAt).getTime()) {
@@ -57,7 +59,7 @@ export async function putProgress(userId: string, problemId: string, body: PutPr
         create: { userId, problemId, ...data },
         update: data,
       });
-      return toRowDTO(row);
+      return { ...toRowDTO(row), ...(body.completed === true ? await awardAchievements(tx, userId) : {}) };
     },
     { timeout: 20_000 },
   );
@@ -66,14 +68,18 @@ export async function putProgress(userId: string, problemId: string, body: PutPr
 export async function clearProgress(userId: string, problemId: string): Promise<void> {
   const problem = await db.problem.findUnique({ where: { id: problemId }, select: { id: true } });
   if (!problem) throw new ApiError("NOT_FOUND", "Unknown problem");
-  await db.problemProgress.deleteMany({ where: { userId, problemId } });
+  await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+    await tx.problemProgress.deleteMany({ where: { userId, problemId } });
+  });
 }
 
 /** Deletes progress, history and saved preferences. Keeps the account and the study plan. */
 export async function resetAll(userId: string): Promise<void> {
-  await db.$transaction([
-    db.problemProgress.deleteMany({ where: { userId } }),
-    db.completionEvent.deleteMany({ where: { userId } }),
-    db.userPreferences.deleteMany({ where: { userId } }),
-  ]);
+  await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+    await tx.problemProgress.deleteMany({ where: { userId } });
+    await tx.completionEvent.deleteMany({ where: { userId } });
+    await tx.userPreferences.deleteMany({ where: { userId } });
+  });
 }
