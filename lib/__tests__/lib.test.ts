@@ -1,18 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { addDays, diffDays, isIsoDate } from "../dates";
-import { applyFilters, buildDayIndex, sortProblems } from "../filters";
+import { applyFilters, sortProblems } from "../filters";
 import { PROBLEMS, PROBLEM_IDS } from "../problems";
-import { currentDayIndex, generateSchedule } from "../schedule";
-import { activityByDay, computeStreaks, difficultyProgress, crossedMilestone, dayProgress, overallProgress, overdueIds, topicProgress } from "../stats";
+import { activityByDay, computeStreaks, difficultyProgress, crossedMilestone, overallProgress, topicProgress } from "../stats";
 import {
-  STORAGE_KEY,
   defaultProgress,
   exportProgress,
-  loadProgress,
   parseImport,
-  saveProgress,
   validateProgress,
-} from "../storage";
+} from "../progress";
 import { DASHBOARD_QUOTES, DIFFICULT_PROBLEM_QUOTES, STREAK_QUOTES, dailyQuote } from "../quotes";
 import { DEFAULT_FILTERS, type Problem } from "../types";
 
@@ -42,31 +38,6 @@ describe("dates", () => {
   });
 });
 
-describe("schedule", () => {
-  it("starts Day 01 on 13 Oct 2026 with exactly two problems per day", () => {
-    const s = generateSchedule(PROBLEMS);
-    expect(s[0]).toMatchObject({ day: 1, label: "Day 01", date: "2026-10-13" });
-    expect(s[1].date).toBe("2026-10-14");
-    expect(s.every((d) => d.problemIds.length === 2)).toBe(true);
-    expect(s).toHaveLength(PROBLEMS.length / 2);
-    expect(s[s.length - 1].label).toBe(`Day ${s.length}`);
-  });
-  it("includes weekends and keeps sheet order", () => {
-    const s = generateSchedule(PROBLEMS);
-    expect(s.map((d) => d.date).slice(0, 7)).toEqual([
-      "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19",
-    ]);
-    expect(s.flatMap((d) => d.problemIds)).toEqual(PROBLEMS.map((p) => p.id));
-  });
-  it("finds the current day", () => {
-    const s = generateSchedule(PROBLEMS);
-    expect(currentDayIndex(s, "2026-10-12")).toBe(-1);
-    expect(currentDayIndex(s, "2026-10-13")).toBe(0);
-    expect(currentDayIndex(s, "2026-10-15")).toBe(2);
-    expect(currentDayIndex(s, "2030-01-01")).toBe(s.length);
-  });
-});
-
 describe("dataset", () => {
   it("has unique ids, valid links and known difficulties", () => {
     expect(PROBLEM_IDS.size).toBe(PROBLEMS.length);
@@ -83,9 +54,8 @@ describe("dataset", () => {
 });
 
 describe("filters", () => {
-  const schedule = generateSchedule(P, "2026-10-13");
   const completed = { a: rec("2026-10-13"), b: rec("2026-10-13") };
-  const ctx = { dayOf: buildDayIndex(schedule), completed, today: "2026-10-14" };
+  const ctx = { completed };
 
   it("combines difficulty + topic + status", () => {
     const out = applyFilters(P, { ...DEFAULT_FILTERS, difficulty: "Medium", topic: "Binary Search", status: "pending" }, ctx);
@@ -94,12 +64,13 @@ describe("filters", () => {
   it("searches by name case-insensitively", () => {
     expect(applyFilters(P, { ...DEFAULT_FILTERS, query: "MEDIAN" }, ctx).map((p) => p.id)).toEqual(["c"]);
   });
-  it("filters by date buckets", () => {
-    const f = (date: string) => applyFilters(P, { ...DEFAULT_FILTERS, date: date as never }, ctx).map((p) => p.id);
-    expect(f("today")).toEqual(["c", "d"]);
-    expect(f("upcoming")).toEqual(["e"]);
-    expect(f("completed-days")).toEqual(["a", "b"]);
-    expect(f("overdue")).toEqual([]);
+  it("normalizes retired schedule filters without hiding problems", () => {
+    for (const date of ["today", "upcoming", "completed-days", "overdue"]) {
+      const progress = defaultProgress();
+      const imported = validateProgress({ ...progress, prefs: { ...progress.prefs, filters: { ...DEFAULT_FILTERS, date } } });
+      expect(imported!.prefs.filters.date).toBe("all");
+      expect(applyFilters(P, imported!.prefs.filters, ctx)).toHaveLength(P.length);
+    }
   });
   it("sorts without mutating", () => {
     expect(sortProblems(P, "difficulty", {}).map((p) => p.difficulty)).toEqual(["Easy", "Medium", "Medium", "Hard", "Hard"]);
@@ -109,18 +80,11 @@ describe("filters", () => {
 });
 
 describe("progress", () => {
-  it("computes overall, day and topic progress", () => {
+  it("computes overall and topic progress", () => {
     const completed = { a: rec("2026-10-13"), c: rec("2026-10-13") };
     expect(overallProgress(P, completed)).toEqual({ total: 5, done: 2, pending: 3, pct: 40 });
     expect(overallProgress([], {}).pct).toBe(0);
-    const s = generateSchedule(P);
-    expect(dayProgress(s[0], completed)).toEqual({ done: 1, total: 2 });
     expect(topicProgress(P, completed).find((t) => t.topic === "Binary Search")).toMatchObject({ total: 3, done: 1, pct: 33 });
-  });
-  it("lists overdue pending problems without rescheduling", () => {
-    const s = generateSchedule(P);
-    expect(overdueIds(s, { a: rec("2026-10-13") }, "2026-10-15")).toEqual(["b", "c", "d"].slice(0, 3));
-    expect(s[1].date).toBe("2026-10-14");
   });
   it("detects milestones", () => {
     expect(crossedMilestone(24, 25)).toBe(25);
@@ -178,39 +142,7 @@ describe("streaks", () => {
   });
 });
 
-function fakeStorage(initial?: string) {
-  const m = new Map<string, string>();
-  if (initial !== undefined) m.set(STORAGE_KEY, initial);
-  return {
-    getItem: (k: string) => m.get(k) ?? null,
-    setItem: (k: string, v: string) => void m.set(k, v),
-    removeItem: (k: string) => void m.delete(k),
-  };
-}
-
-describe("storage", () => {
-  it("round-trips progress", () => {
-    const p = defaultProgress();
-    p.completed.a = rec("2026-10-13", 5);
-    p.notes.a = "use hashmap";
-    p.revision.a = "mastered";
-    const st = fakeStorage();
-    expect(saveProgress(st, p)).toBe(true);
-    const { progress, corrupted } = loadProgress(st);
-    expect(corrupted).toBe(false);
-    expect(progress).toEqual(p);
-  });
-  it("falls back safely on corrupted or invalid data", () => {
-    expect(loadProgress(fakeStorage("{not json")).corrupted).toBe(true);
-    expect(loadProgress(fakeStorage('{"version":2}')).progress).toEqual(defaultProgress());
-    expect(loadProgress(fakeStorage()).corrupted).toBe(false);
-    expect(loadProgress(null).progress.startDate).toBe("2026-10-13");
-  });
-  it("survives a throwing storage", () => {
-    const bad = { getItem: () => { throw new Error("x"); }, setItem: () => { throw new Error("x"); }, removeItem: () => {} };
-    expect(loadProgress(bad).corrupted).toBe(true);
-    expect(saveProgress(bad, defaultProgress())).toBe(false);
-  });
+describe("progress format", () => {
   it("validates imports and rejects bad schemas", () => {
     const good = JSON.parse(exportProgress(defaultProgress()));
     expect(validateProgress(good)).not.toBeNull();
