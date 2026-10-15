@@ -1,120 +1,112 @@
 "use client";
 
 import { createContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ACHIEVEMENTS, type AchievementDTO } from "@/lib/achievements";
 import { toast } from "sonner";
 import { todayIso } from "@/lib/dates";
-import { applyFilters, buildDayIndex, sortProblems } from "@/lib/filters";
-import { PROBLEMS, PROBLEM_IDS } from "@/lib/problems";
-import { currentDayIndex, generateSchedule } from "@/lib/schedule";
+import { applyFilters, sortProblems } from "@/lib/filters";
+import { PROBLEMS } from "@/lib/problems";
 import {
-  crossedMilestone,
-  dayProgress,
   overallProgress,
-  overdueIds,
   streaksFromCompleted,
   topicProgress,
 } from "@/lib/stats";
-import {
-  clearProgress,
-  defaultProgress,
-  exportProgress,
-  getBrowserStorage,
-  loadProgress,
-  saveProgress,
-} from "@/lib/storage";
+import { defaultProgress } from "@/lib/progress";
 import { SyncController, type SyncMode } from "@/lib/sync/controller";
 import type { SyncState } from "@/lib/sync/queue";
-import { DEFAULT_FILTERS, type DayPlan, type Filters, type Problem, type Progress, type RevisionStatus } from "@/lib/types";
+import { DEFAULT_FILTERS, type Filters, type Problem, type Progress, type RevisionStatus, type UiPreferences } from "@/lib/types";
 
 export interface TrackerValue {
-  /** False until LocalStorage has been read on the client (avoids hydration mismatch). */
+  achievements: AchievementDTO[];
+  highlightedAchievement: string | null;
+  /** False until the API snapshot has loaded (avoids hydration mismatch). */
   ready: boolean;
   progress: Progress;
   today: string;
-  schedule: DayPlan[];
-  dayOf: ReadonlyMap<string, DayPlan>;
   problemById: ReadonlyMap<string, Problem>;
-  todayIndex: number;
-  todayPlan: DayPlan | undefined;
   overall: ReturnType<typeof overallProgress>;
   streaks: { current: number; longest: number };
   topics: ReturnType<typeof topicProgress>;
-  overdue: string[];
   filters: Filters;
   filtered: Problem[];
-  storageOk: boolean;
-  corrupted: boolean;
-  /** Server sync (feature-flagged). `mode` is "guest" when signed out or when sync is disabled. */
+  loadError: string | null;
+  retryLoad: () => void;
+  retrySave: () => void;
+  flushSaves: () => void;
+  busy: boolean;
+  setUi: (patch: Partial<UiPreferences>) => void;
   sync: { enabled: boolean; mode: SyncMode; state: SyncState; pending: number };
-  /** Set when this device has progress, the account is empty and the user has not chosen yet. */
-  claimOffer: Progress | null;
-  claimLocal: () => Promise<void>;
-  dismissClaim: () => void;
   exportData: () => Promise<string>;
   toggleComplete: (id: string) => void;
   setNote: (id: string, note: string) => void;
   setRevision: (id: string, status: RevisionStatus | null) => void;
   setFilters: (patch: Partial<Filters>) => void;
   clearFilters: () => void;
-  setStartDate: (iso: string) => void;
   replaceProgress: (p: Progress) => Promise<void>;
   resetProgress: () => Promise<void>;
 }
 
 export const TrackerContext = createContext<TrackerValue | null>(null);
 const problemById = new Map(PROBLEMS.map((p) => [p.id, p]));
-const SYNC_ENABLED = process.env.NEXT_PUBLIC_SYNC === "on";
 
 export function TrackerProvider({ children }: { children: ReactNode }) {
+  const [achievements, setAchievements] = useState<AchievementDTO[]>([]);
+  const [highlightedAchievement, setHighlightedAchievement] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress>(defaultProgress);
   const [ready, setReady] = useState(false);
   const [today, setToday] = useState("2026-10-13");
-  const [storageOk, setStorageOk] = useState(true);
-  const [corrupted, setCorrupted] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const ref = useRef(progress);
   const todayRef = useRef(today);
   const controllerRef = useRef<SyncController | null>(null);
-  const [syncMode, setSyncMode] = useState<SyncMode>("guest");
+  const [syncMode, setSyncMode] = useState<SyncMode>("unknown");
   const [syncState, setSyncState] = useState<{ state: SyncState; pending: number }>({ state: "idle", pending: 0 });
-  const [claimOffer, setClaimOffer] = useState<Progress | null>(null);
-
-  // Read browser-only state after hydration.
   useEffect(() => {
-    /* eslint-disable react-hooks/set-state-in-effect -- one-time hydration from LocalStorage */
-    const storage = getBrowserStorage();
-    const res = loadProgress(storage, PROBLEM_IDS);
-    ref.current = res.progress;
-    setProgress(res.progress);
-    setCorrupted(res.corrupted);
-    setStorageOk(storage !== null);
+    let active = true;
     const t = todayIso();
     todayRef.current = t;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initialize the client clock alongside the API connection
     setToday(t);
-    setReady(true);
-    /* eslint-enable react-hooks/set-state-in-effect */
-
-    if (!SYNC_ENABLED) return;
-    const controller = new SyncController(
-      {
-        getProgress: () => ref.current,
-        apply: (p) => {
-          ref.current = p;
-          setProgress(p);
-        },
-        onMode: setSyncMode,
-        onStatus: (s) => setSyncState({ state: s.state, pending: s.pending }),
-        onClaimOffer: setClaimOffer,
-        notify: (kind, message) => (kind === "error" ? toast.error(message) : toast(message)),
+    setLoadError(null);
+    setReady(false);
+    const controller = new SyncController({
+      onAchievements: (earned, newly) => {
+        if (!active) return;
+        setAchievements(earned);
+        if (newly.length) {
+          const latest = ACHIEVEMENTS.filter((m) => newly.some((a) => a.tag === m.tag)).at(-1);
+          if (latest) {
+            setHighlightedAchievement(latest.tag);
+            toast.success(newly.length === 1 ? `Achievement unlocked: ${latest.name}` : `${newly.length} achievements unlocked! ${latest.name}`, { id: `achievement-${latest.tag}` });
+          }
+        }
       },
-      storage,
-    );
+      apply: (p) => { if (active) { ref.current = p; setProgress(p); } },
+      onMode: (mode) => { if (active) { setSyncMode(mode); if (mode === "unknown") { setReady(false); setLoadError("Unable to load saved progress. Retry when connected."); } if (mode === "unauthenticated") { setReady(false); setLoadError("Sign in required. Production authentication must be configured before using the tracker."); } } },
+      onStatus: (s) => { if (active) setSyncState(s); },
+      notify: (kind, message) => kind === "error" ? toast.error(message) : toast(message),
+    });
     controllerRef.current = controller;
-    void controller.start();
-    return () => {
-      controller.destroy();
-      controllerRef.current = null;
+    void controller.start().then(() => { if (active) setReady(true); }).catch((e) => {
+      if (active) setLoadError(e instanceof Error ? e.message : "Unable to load progress");
+    });
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      if (controller.hasPending()) { e.preventDefault(); e.returnValue = ""; }
     };
-  }, []);
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => { active = false; controller.destroy(); controllerRef.current = null; window.removeEventListener("beforeunload", beforeUnload); };
+  }, [attempt]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => document.documentElement.classList.toggle("dark", progress.prefs.ui?.theme === "dark" || ((progress.prefs.ui?.theme ?? "system") === "system" && media.matches));
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [progress.prefs.ui?.theme]);
 
   // Roll "today" over at midnight / when the tab regains focus.
   useEffect(() => {
@@ -134,25 +126,24 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
-    const storage = getBrowserStorage();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reflects the result of writing to an external store
-    setStorageOk(storage !== null && saveProgress(storage, progress));
-  }, [progress, ready]);
+    if (!highlightedAchievement) return;
+    const timer = window.setTimeout(() => setHighlightedAchievement(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [highlightedAchievement]);
 
   const commit = useCallback((next: Progress) => {
+    if (busyRef.current || controllerRef.current?.mode !== "synced") return;
     const prev = ref.current;
     ref.current = next;
     setProgress(next);
-    controllerRef.current?.track(prev, next); // queues the minimal server writes (no-op in guest mode)
+    controllerRef.current.track(prev, next);
   }, []);
 
-  const schedule = useMemo(() => generateSchedule(PROBLEMS, progress.startDate), [progress.startDate]);
-  const dayOf = useMemo(() => buildDayIndex(schedule), [schedule]);
-  const scheduleRef = useRef(schedule);
-  useEffect(() => {
-    scheduleRef.current = schedule;
-  }, [schedule]);
+  const setUi = useCallback((patch: Partial<UiPreferences>) => {
+    const prev = ref.current;
+    const viewChanged = (patch.problemPage !== undefined && patch.problemPage !== (prev.prefs.ui?.problemPage ?? 1)) || (patch.problemLayout !== undefined && patch.problemLayout !== (prev.prefs.ui?.problemLayout ?? "list"));
+    commit({ ...prev, prefs: { ...prev.prefs, ui: { theme: "system", sidebarCollapsed: false, ...prev.prefs.ui, ...(viewChanged ? { problemScrollY: 0 } : {}), ...patch } } });
+  }, [commit]);
 
   const toggleComplete = useCallback(
     (id: string) => {
@@ -166,29 +157,7 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
         return;
       }
       completed[id] = { date: t, at: Date.now() };
-      let next: Progress = { ...prev, completed };
-
-      const before = Object.keys(prev.completed).length;
-      const after = Object.keys(completed).length;
-      const sBefore = streaksFromCompleted(prev.completed, t);
-      const sAfter = streaksFromCompleted(completed, t);
-      const doneToday = (c: Progress["completed"]) => Object.values(c).filter((r) => r.date === t).length;
-      const plan = scheduleRef.current.find((d) => d.date === t);
-      const planBefore = dayProgress(plan, prev.completed);
-      const planAfter = dayProgress(plan, completed);
-
-      const milestone = crossedMilestone(before, after);
-      if (milestone && !prev.prefs.celebratedMilestones.includes(milestone)) {
-        next = { ...next, prefs: { ...next.prefs, celebratedMilestones: [...prev.prefs.celebratedMilestones, milestone] } };
-        toast.success(`Milestone: ${milestone} problems solved!`, { description: "That is serious, compounding progress. Keep going." });
-      } else if (plan && planAfter.total > 0 && planAfter.done === planAfter.total && planBefore.done < planBefore.total) {
-        toast.success("Both of today's problems are done", { description: "Day complete. Rest well and come back tomorrow." });
-      } else if (sAfter.current > sBefore.longest && sAfter.current >= 2) {
-        toast.success(`New personal best: ${sAfter.current}-day streak`, { description: "Consistency is paying off." });
-      } else if (doneToday(prev.completed) === 0) {
-        toast("First problem of the day down", { description: "The hardest part is starting. You've started." });
-      }
-      commit(next);
+      commit({ ...prev, completed });
     },
     [commit],
   );
@@ -218,83 +187,56 @@ export function TrackerProvider({ children }: { children: ReactNode }) {
   const setFilters = useCallback(
     (patch: Partial<Filters>) => {
       const prev = ref.current;
-      commit({ ...prev, prefs: { ...prev.prefs, filters: { ...prev.prefs.filters, ...patch } } });
+      const changed = (Object.keys(patch) as (keyof Filters)[]).some((key) => patch[key] !== prev.prefs.filters[key]);
+      commit({ ...prev, prefs: {
+        ...prev.prefs,
+        filters: { ...prev.prefs.filters, ...patch },
+        ui: { theme: "system", sidebarCollapsed: false, ...prev.prefs.ui, ...(changed ? { problemPage: 1, problemScrollY: 0 } : {}) },
+      } });
     },
     [commit],
   );
 
   const clearFilters = useCallback(() => {
     const prev = ref.current;
-    commit({ ...prev, prefs: { ...prev.prefs, filters: { ...DEFAULT_FILTERS, sort: prev.prefs.filters.sort } } });
+    commit({ ...prev, prefs: { ...prev.prefs, ui: { theme: "system", sidebarCollapsed: false, ...prev.prefs.ui, problemPage: 1, problemScrollY: 0 }, filters: { ...DEFAULT_FILTERS, sort: prev.prefs.filters.sort } } });
   }, [commit]);
 
-  const setStartDate = useCallback(
-    (startDate: string) => commit({ ...ref.current, startDate }),
-    [commit],
-  );
-
-  const replaceProgress = useCallback(
-    async (p: Progress) => {
-      const c = controllerRef.current;
-      if (c && c.mode === "synced") {
-        await c.importReplace(p); // server validates, replaces, then we adopt its snapshot
-        return;
-      }
-      commit(p);
-    },
-    [commit],
-  );
-
-  const resetProgress = useCallback(async () => {
+  const exclusive = useCallback(async (action: (c: SyncController) => Promise<unknown>) => {
     const c = controllerRef.current;
-    if (c && c.mode === "synced") {
-      await c.reset();
-      return;
-    }
-    clearProgress(getBrowserStorage());
-    commit(defaultProgress());
-  }, [commit]);
-
-  const exportData = useCallback(async () => {
-    const fromServer = await controllerRef.current?.exportText();
-    return fromServer ?? exportProgress(ref.current);
+    if (!c || busyRef.current) throw new Error("Another operation is in progress");
+    busyRef.current = true;
+    setBusy(true);
+    try { await action(c); } finally { busyRef.current = false; setBusy(false); }
   }, []);
-
-  const claimLocal = useCallback(async () => {
-    const offer = claimOffer;
-    if (!offer || !controllerRef.current) return;
-    await controllerRef.current.claimLocal(offer);
-    setClaimOffer(null);
-  }, [claimOffer]);
-
-  const dismissClaim = useCallback(() => {
-    controllerRef.current?.dismissClaim();
-    setClaimOffer(null);
+  const replaceProgress = useCallback(async (p: Progress) => { await exclusive((c) => c.importReplace(p)); }, [exclusive]);
+  const resetProgress = useCallback(async () => { await exclusive((c) => c.reset()); }, [exclusive]);
+  const exportData = useCallback(async () => {
+    const c = controllerRef.current;
+    if (!c) throw new Error("Progress is not loaded");
+    return c.exportText();
   }, []);
 
   const filters = progress.prefs.filters;
   const filtered = useMemo(
     () =>
       sortProblems(
-        applyFilters(PROBLEMS, filters, { dayOf, completed: progress.completed, today }),
+        applyFilters(PROBLEMS, filters, { completed: progress.completed }),
         filters.sort,
         progress.completed,
       ),
-    [filters, dayOf, progress.completed, today],
+    [filters, progress.completed],
   );
 
-  const todayIndex = useMemo(() => currentDayIndex(schedule, today), [schedule, today]);
-  const todayPlan = todayIndex >= 0 && todayIndex < schedule.length ? schedule[todayIndex] : undefined;
   const overall = useMemo(() => overallProgress(PROBLEMS, progress.completed), [progress.completed]);
   const streaks = useMemo(() => streaksFromCompleted(progress.completed, today), [progress.completed, today]);
   const topics = useMemo(() => topicProgress(PROBLEMS, progress.completed), [progress.completed]);
-  const overdue = useMemo(() => overdueIds(schedule, progress.completed, today), [schedule, progress.completed, today]);
 
   const value: TrackerValue = {
-    ready, progress, today, schedule, dayOf, problemById, todayIndex, todayPlan, overall, streaks, topics, overdue,
-    filters, filtered, storageOk, corrupted,
-    sync: { enabled: SYNC_ENABLED, mode: syncMode, ...syncState }, claimOffer, claimLocal, dismissClaim, exportData,
-    toggleComplete, setNote, setRevision, setFilters, clearFilters, setStartDate, replaceProgress, resetProgress,
+    achievements, highlightedAchievement, ready, progress, today, problemById, overall, streaks, topics,
+    filters, filtered, loadError, retryLoad: () => setAttempt((v) => v + 1), retrySave: () => controllerRef.current?.retry(), flushSaves: () => controllerRef.current?.flushOnExit(ref.current), busy, setUi,
+    sync: { enabled: true, mode: syncMode, ...syncState }, exportData,
+    toggleComplete, setNote, setRevision, setFilters, clearFilters, replaceProgress, resetProgress,
   };
   return <TrackerContext.Provider value={value}>{children}</TrackerContext.Provider>;
 }
