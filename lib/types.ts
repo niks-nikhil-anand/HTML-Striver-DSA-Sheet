@@ -24,17 +24,10 @@ export interface Problem {
   javaSolutionUrl?: string;
 }
 
-export interface DayPlan {
-  day: number;
-  label: string;
-  /** ISO date, YYYY-MM-DD. */
-  date: string;
-  problemIds: string[];
-}
-
 export type RevisionStatus = "needs-revision" | "mastered";
 export type StatusFilter = "all" | "completed" | "pending";
-export type DateFilter = "all" | "today" | "upcoming" | "completed-days" | "overdue";
+/** Retained for version-1 backup compatibility; scheduling filters are retired. */
+export type DateFilter = "all";
 export type SortKey = "schedule" | "title" | "difficulty" | "topic" | "status";
 
 export interface Filters {
@@ -53,7 +46,18 @@ export interface CompletionRecord {
   at: number;
 }
 
+export interface UiPreferences {
+  problemScrollY?: number;
+  /** One-based page in the problems list. */
+  problemPage?: number;
+  problemLayout?: "grid" | "list";
+  activityRange?: "year" | "30d" | "7d";
+  theme: "system" | "light" | "dark";
+  sidebarCollapsed: boolean;
+}
+
 export interface Preferences {
+  ui?: UiPreferences;
   filters: Filters;
   celebratedMilestones: number[];
 }

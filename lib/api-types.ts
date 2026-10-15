@@ -1,3 +1,4 @@
+import type { AchievementUpdate, AchievementDTO } from "./achievements";
 import type { Progress, RevisionStatus } from "./types";
 
 /** Shared by the API handlers and the browser client (no server imports here). */
@@ -17,6 +18,8 @@ export interface ApiErrorBody {
 
 /** One problem's saved state. */
 export interface ProgressRowDTO {
+  achievements?: AchievementDTO[];
+  newAchievements?: AchievementDTO[];
   problemId: string;
   completed: boolean;
   completedDate: string | null; // user's local YYYY-MM-DD
@@ -29,6 +32,7 @@ export interface ProgressRowDTO {
 /** GET /api/v1/progress: the existing `Progress` shape plus per-row server timestamps. */
 export interface SnapshotDTO extends Progress {
   rowUpdatedAt: Record<string, string>;
+  achievements?: AchievementDTO[];
 }
 
 export interface PutProgressBody {
@@ -39,7 +43,7 @@ export interface PutProgressBody {
   clientUpdatedAt?: string;
 }
 
-export interface ImportResultDTO {
+export interface ImportResultDTO extends Partial<AchievementUpdate> {
   imported: number;
   skipped: number;
 }
