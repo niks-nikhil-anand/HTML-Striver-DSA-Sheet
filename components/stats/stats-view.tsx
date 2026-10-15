@@ -19,13 +19,10 @@ import { cn } from "@/lib/utils";
 const DIFF_TONE = { Easy: "text-success", Medium: "text-warning", Hard: "text-destructive" } as const;
 
 export function StatsView() {
-  const { overall, streaks, progress, schedule, todayIndex, overdue, today } = useTracker();
+  const { overall, streaks, progress, today } = useTracker();
   const diff = useMemo(() => difficultyProgress(PROBLEMS, progress.completed), [progress.completed]);
   const revised = Object.values(progress.revision);
   const notes = Object.keys(progress.notes).length;
-  const daysElapsed = Math.max(0, Math.min(todayIndex + 1, schedule.length));
-  const expected = daysElapsed * 2;
-  const onTrack = overall.done - expected;
 
   return (
     <div className="grid gap-5">
@@ -38,9 +35,7 @@ export function StatsView() {
           <div className="text-sm">
             <p className="font-heading text-lg font-semibold tabular-nums">{overall.done}/{overall.total}</p>
             <p className="text-muted-foreground">problems solved</p>
-            <p className={cn("mt-1 text-xs font-medium", onTrack >= 0 ? "text-success" : "text-warning")}>
-              {daysElapsed === 0 ? "Plan hasn't started" : onTrack >= 0 ? `${onTrack} ahead of schedule` : `${-onTrack} behind schedule`}
-            </p>
+
           </div>
         </Panel>
         <Panel>
@@ -59,7 +54,6 @@ export function StatsView() {
         <Panel>
           <SectionTitle icon={<Target className="size-4 text-primary" />} title="Workflow" />
           <dl className="grid grid-cols-2 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Overdue</dt><dd className="text-right font-medium tabular-nums">{overdue.length}</dd>
             <dt className="text-muted-foreground">Needs revision</dt><dd className="text-right font-medium tabular-nums">{revised.filter((r) => r === "needs-revision").length}</dd>
             <dt className="text-muted-foreground">Mastered</dt><dd className="text-right font-medium tabular-nums">{revised.filter((r) => r === "mastered").length}</dd>
             <dt className="text-muted-foreground">Problems with notes</dt><dd className="text-right font-medium tabular-nums">{notes}</dd>

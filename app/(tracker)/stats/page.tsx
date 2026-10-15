@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Statistics & Analytics" };
 export default function Page() {
   return (
     <>
-      <PageHeader title="Statistics & Analytics" showJump={false} />
+      <PageHeader title="Statistics & Analytics" />
       <StatsView />
     </>
   );
