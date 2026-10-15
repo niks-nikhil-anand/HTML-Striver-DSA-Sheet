@@ -1,6 +1,6 @@
 import "server-only";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@/lib/generated/prisma/client";
+import { PrismaClient } from "@/lib/prisma-client/client";
 
 // One PrismaClient per server instance. Cached on globalThis in dev so hot reloads
 // don't open a new connection pool on every edit.
