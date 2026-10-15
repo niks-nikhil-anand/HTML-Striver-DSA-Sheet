@@ -1,7 +1,8 @@
 import "server-only";
+import { awardAchievements } from "./achievements.service";
 import type { ImportResultDTO } from "@/lib/api-types";
 import { PROBLEM_IDS } from "@/lib/problems";
-import { exportProgress, validateProgress } from "@/lib/storage";
+import { exportProgress, validateProgress } from "@/lib/progress";
 import { db } from "../db";
 import { ApiError } from "../errors";
 import { toDateOnly, toDbRevision } from "../mappers";
@@ -28,7 +29,7 @@ function countRawIds(data: unknown): number {
  * replace: wipe this user's progress and write the file's contents.
  * merge:   union. A problem counts as completed if either side has it (earliest date wins);
  *          existing notes/revision win over imported ones; existing plan and preferences are kept.
- * The file is validated with the SAME validator the browser uses (lib/storage.ts).
+ * The file is validated with the SAME validator the browser uses (lib/progress.ts).
  */
 export async function importProgress(userId: string, data: unknown, mode: "replace" | "merge"): Promise<ImportResultDTO> {
   const valid = validateProgress(data, PROBLEM_IDS);
@@ -37,8 +38,9 @@ export async function importProgress(userId: string, data: unknown, mode: "repla
   const ids = [...new Set([...Object.keys(valid.completed), ...Object.keys(valid.notes), ...Object.keys(valid.revision)])];
   const skipped = Math.max(0, countRawIds(data) - ids.length);
 
-  await db.$transaction(
+  const awards = await db.$transaction(
     async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
       if (mode === "replace") {
         await tx.problemProgress.deleteMany({ where: { userId } });
         await tx.studyPlan.upsert({
@@ -46,7 +48,7 @@ export async function importProgress(userId: string, data: unknown, mode: "repla
           create: { userId, startDate: toDateOnly(valid.startDate) },
           update: { startDate: toDateOnly(valid.startDate) },
         });
-        const prefs = { filters: { ...valid.prefs.filters }, celebratedMilestones: valid.prefs.celebratedMilestones };
+        const prefs = { ui: { ...valid.prefs.ui, theme: valid.prefs.ui?.theme ?? "system", sidebarCollapsed: valid.prefs.ui?.sidebarCollapsed ?? false }, filters: { ...valid.prefs.filters }, celebratedMilestones: valid.prefs.celebratedMilestones };
         await tx.userPreferences.upsert({ where: { userId }, create: { userId, ...prefs }, update: prefs });
         await tx.problemProgress.createMany({
           data: ids.map((id) => {
@@ -61,12 +63,18 @@ export async function importProgress(userId: string, data: unknown, mode: "repla
             };
           }),
         });
-        return;
+        return awardAchievements(tx, userId);
       }
 
       await tx.studyPlan.upsert({ where: { userId }, create: { userId, startDate: toDateOnly(valid.startDate) }, update: {} });
       const existing = new Map((await tx.problemProgress.findMany({ where: { userId, problemId: { in: ids } } })).map((r) => [r.problemId, r]));
+      const missing = ids.filter((id) => !existing.has(id));
+      if (missing.length) await tx.problemProgress.createMany({ data: missing.map((id) => {
+        const c = valid.completed[id];
+        return { userId, problemId: id, completedAt: c ? new Date(c.at) : null, completedDate: c ? toDateOnly(c.date) : null, note: valid.notes[id] ?? null, revision: toDbRevision(valid.revision[id]) };
+      }) });
       for (const id of ids) {
+        if (!existing.has(id)) continue;
         const c = valid.completed[id];
         const ex = existing.get(id);
         let completedAt = ex?.completedAt ?? null;
@@ -84,15 +92,17 @@ export async function importProgress(userId: string, data: unknown, mode: "repla
           note: ex?.note ?? valid.notes[id] ?? null,
           revision: ex?.revision ?? toDbRevision(valid.revision[id]),
         };
+        if (ex && ex.completedAt?.getTime() === data.completedAt?.getTime() && ex.completedDate?.getTime() === data.completedDate?.getTime() && ex.note === data.note && ex.revision === data.revision) continue;
         await tx.problemProgress.upsert({
           where: { userId_problemId: { userId, problemId: id } },
           create: { userId, problemId: id, ...data },
           update: data,
         });
       }
+      return awardAchievements(tx, userId);
     },
     { timeout: 60_000 },
   );
 
-  return { imported: ids.length, skipped };
+  return { imported: ids.length, skipped, ...awards };
 }
