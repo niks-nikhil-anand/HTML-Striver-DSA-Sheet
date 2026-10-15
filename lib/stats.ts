@@ -1,24 +1,15 @@
+import { ACHIEVEMENTS } from "./achievements";
 import { addDays } from "./dates";
-import type { CompletionRecord, DayPlan, Problem } from "./types";
+import type { CompletionRecord, Problem } from "./types";
 
 type Completed = Record<string, CompletionRecord>;
 
-export const MILESTONES = [25, 50, 100, 250, 400] as const;
+export const MILESTONES = ACHIEVEMENTS.map((m) => m.threshold);
 
 export function overallProgress(problems: readonly Problem[], completed: Completed) {
   const total = problems.length;
   const done = problems.reduce((n, p) => (completed[p.id] ? n + 1 : n), 0);
   return { total, done, pending: total - done, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
-}
-
-export function dayProgress(day: DayPlan | undefined, completed: Completed) {
-  if (!day) return { done: 0, total: 0 };
-  return { done: day.problemIds.filter((id) => completed[id]).length, total: day.problemIds.length };
-}
-
-export function isDayComplete(day: DayPlan, completed: Completed): boolean {
-  const p = dayProgress(day, completed);
-  return p.total > 0 && p.done === p.total;
 }
 
 export function topicProgress(problems: readonly Problem[], completed: Completed) {
@@ -30,11 +21,6 @@ export function topicProgress(problems: readonly Problem[], completed: Completed
     map.set(p.topic, t);
   }
   return [...map.values()].map((t) => ({ ...t, pct: Math.round((t.done / t.total) * 100) }));
-}
-
-/** Pending problems whose scheduled day is before today. Never reschedules. */
-export function overdueIds(schedule: readonly DayPlan[], completed: Completed, today: string): string[] {
-  return schedule.filter((d) => d.date < today).flatMap((d) => d.problemIds.filter((id) => !completed[id]));
 }
 
 /**
