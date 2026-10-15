@@ -1,230 +1,136 @@
-import type { ProgressRowDTO, SnapshotDTO } from "@/lib/api-types";
+import type { AchievementDTO } from "@/lib/achievements";
+import type { SnapshotDTO } from "@/lib/api-types";
 import { PROBLEM_IDS } from "@/lib/problems";
-import { validateProgress } from "@/lib/storage";
+import { validateProgress } from "@/lib/progress";
 import type { Progress } from "@/lib/types";
 import { api, ApiClientError } from "./api-client";
-import { applyOp, diffProgress, type SyncOp } from "./diff";
+import { applyOp, diffProgress, mergeOps, opKey, type SyncOp } from "./diff";
 import { SyncQueue, type SyncStatus } from "./queue";
 
-/**
- * guest   : not signed in (or sync disabled). The app works exactly as before, on LocalStorage.
- * unknown : sync enabled but the first server contact has not succeeded yet.
- * synced  : signed in; every change is queued to the server.
- */
-export type SyncMode = "guest" | "unknown" | "synced";
-
-export interface ControllerEvents {
-  getProgress: () => Progress;
-  /** Replace UI state WITHOUT triggering another sync. */
+export type SyncMode = "unknown" | "synced" | "unauthenticated";
+interface Events {
+  onAchievements?: (earned: AchievementDTO[], newly: AchievementDTO[]) => void;
   apply: (p: Progress) => void;
-  onMode: (m: SyncMode) => void;
+  onMode: (mode: SyncMode) => void;
   onStatus: (s: SyncStatus) => void;
-  /** Local data exists, the account is empty and the user has not decided yet. */
-  onClaimOffer: (local: Progress) => void;
   notify: (kind: "error" | "info", message: string) => void;
 }
 
-const PENDING_KEY = "dsa-tracker:pending";
-const HANDLED_KEY = "dsa-tracker:claim-handled";
-const BACKUP_KEY = "dsa-tracker:local-backup";
-
-const hasData = (p: Progress) => Object.keys(p.completed).length + Object.keys(p.notes).length + Object.keys(p.revision).length > 0;
-
-function fromSnapshot(s: SnapshotDTO): Progress {
-  // Normalise through the same validator the browser uses for imports.
-  const valid = validateProgress(s, PROBLEM_IDS);
-  if (!valid) throw new ApiClientError("INTERNAL", 500, "Server returned an unreadable snapshot");
-  return valid;
-}
-
+/** API mutations with in-memory ordering, debounce and retries. No browser persistence. */
 export class SyncController {
-  mode: SyncMode = "guest";
-  private stamps = new Map<string, string>();
+  mode: SyncMode = "unknown";
+  private stamps: Record<string, string> = {};
   private queue: SyncQueue;
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
-  private cleanup: Array<() => void> = [];
+  private exclusive = false;
+  private failed = false;
+  private rejected = new Map<string, SyncOp>();
+  private exitSnapshotKey = "";
+  private status: SyncStatus = { state: "idle", pending: 0 };
 
-  constructor(
-    private ev: ControllerEvents,
-    private storage: Storage | null,
-  ) {
+  constructor(private ev: Events) {
     this.queue = new SyncQueue({
       send: (op) => this.send(op),
-      onStatus: ev.onStatus,
-      onRejected: (_op, err) => {
-        if (err.status === 401) return this.goGuest("You are signed out. Changes are now saved on this device only.");
-        this.ev.notify("error", err.message);
-        void this.refresh(); // resync so the UI reverts the rejected change
+      onStatus: (s) => { this.status = s; if (!this.destroyed) ev.onStatus({ ...s, state: this.failed && s.pending === 0 ? "error" : s.state }); },
+      onRejected: async (op, err) => {
+        this.failed = true;
+        if (err.status === 401) {
+          this.mode = "unauthenticated";
+          ev.onMode(this.mode);
+          this.queue.clear();
+        }
+        ev.notify("error", err.status === 401 ? "Your session expired. Sign in and reload to continue." : err.message);
+        if (err.status !== 401) this.rejected.set(opKey(op), op);
       },
-      onConflict: (op, err) => this.adoptConflict(op, err),
-      storage,
-      storageKey: PENDING_KEY,
+      onConflict: async () => {
+        this.failed = true;
+        ev.notify("info", "This problem changed elsewhere. Loading the saved version.");
+        await this.refresh().catch(() => {});
+      },
     });
   }
 
-  /** Begin: contact the server and, if signed in, switch to synced mode. */
-  async start(): Promise<void> {
-    this.setMode("unknown");
-    this.queue.restore();
-
-    const onVisibility = () => document.visibilityState === "hidden" && this.queue.flushNow();
-    const onOnline = () => {
-      this.queue.flushNow();
-      if (this.mode === "unknown") void this.connect();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", onVisibility);
-    window.addEventListener("online", onOnline);
-    this.cleanup.push(
-      () => document.removeEventListener("visibilitychange", onVisibility),
-      () => window.removeEventListener("pagehide", onVisibility),
-      () => window.removeEventListener("online", onOnline),
-    );
-    await this.connect();
+  async start() { await this.refresh(); }
+  destroy() { this.destroyed = true; this.queue.destroy(); }
+  flush() { this.queue.flushNow(); }
+  flushOnExit(progress: Progress) {
+    if (this.destroyed || this.exclusive || this.mode !== "synced") return;
+    this.queue.flushNow();
+    const patch = { filters: progress.prefs.filters, ui: progress.prefs.ui, celebratedMilestones: progress.prefs.celebratedMilestones };
+    const key = JSON.stringify(patch);
+    if (key === this.exitSnapshotKey) return;
+    this.exitSnapshotKey = key;
+    // Initiate a full keepalive request even if the ordinary queue is still busy.
+    // Server-side sequence checks prevent older in-flight saves overwriting it.
+    void api.patchPreferences(patch).catch(() => {
+      this.exitSnapshotKey = "";
+      if (!this.destroyed) this.queue.flushNow();
+    });
   }
-
-  destroy() {
-    this.destroyed = true;
-    if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.queue.destroy();
-    this.cleanup.forEach((fn) => fn());
+  hasPending() { return this.status.pending > 0 || this.rejected.size > 0; }
+  retry() {
+    if (this.mode !== "synced") return;
+    const ops = [...this.rejected.values()];
+    this.rejected.clear(); this.failed = false;
+    for (const op of ops) this.queue.enqueue(op);
+    this.queue.flushNow();
   }
-
-  /** Called by the provider after every local change. */
   track(prev: Progress, next: Progress) {
-    if (this.mode === "guest") return;
-    for (const op of diffProgress(prev, next)) this.queue.enqueue(op);
-  }
-
-  async importReplace(p: Progress): Promise<void> {
-    if (this.mode !== "synced") return;
-    await api.importData("replace", p);
-    this.queue.clear();
-    await this.refresh();
-  }
-
-  async reset(): Promise<void> {
-    if (this.mode !== "synced") return;
-    await api.resetAll();
-    this.queue.clear();
-    await this.refresh();
-  }
-
-  async exportText(): Promise<string | null> {
-    if (this.mode !== "synced") return null;
-    try {
-      return await api.exportText();
-    } catch {
-      return null; // caller falls back to a local export
+    if (this.mode !== "synced" || this.exclusive) return;
+    for (const change of diffProgress(prev, next)) {
+      const rejected = this.rejected.get(opKey(change));
+      const op = rejected ? mergeOps(rejected, change) : change;
+      this.rejected.delete(opKey(op));
+      this.failed = this.rejected.size > 0;
+      this.queue.enqueue(op);
     }
   }
-
-  /** The user chose to move this device's progress into the account. */
-  async claimLocal(local: Progress): Promise<void> {
-    await api.migrateLocal(local);
-    this.markHandled();
-    await this.refresh();
-  }
-
-  dismissClaim() {
-    this.markHandled();
-  }
-
-  // -- internals ------------------------------------------------------------
-
-  private setMode(m: SyncMode) {
-    this.mode = m;
-    this.ev.onMode(m);
-  }
-
-  private goGuest(message?: string) {
-    this.queue.clear();
-    this.setMode("guest");
-    if (message) this.ev.notify("info", message);
-  }
-
-  private markHandled() {
-    try {
-      this.storage?.setItem(HANDLED_KEY, "1");
-    } catch {
-      /* ignore */
-    }
-  }
-  private isHandled() {
-    try {
-      return this.storage?.getItem(HANDLED_KEY) === "1";
-    } catch {
-      return false;
-    }
-  }
-
-  private async connect(): Promise<void> {
+  private adopt(s: SnapshotDTO) {
     if (this.destroyed) return;
+    const p = validateProgress(s, PROBLEM_IDS);
+    if (!p) throw new Error("Server returned invalid progress");
+    this.stamps = s.rowUpdatedAt;
+    this.ev.onAchievements?.(s.achievements ?? [], []);
+    this.ev.apply([...this.rejected.values(), ...this.queue.pendingOps()].reduce((acc, op) => applyOp(acc, op), p));
+  }
+  async refresh() {
     try {
       const snapshot = await api.getSnapshot();
-      const local = this.ev.getProgress();
-      const server = fromSnapshot(snapshot);
-      const serverEmpty = !hasData(server);
-
-      if (serverEmpty && hasData(local) && !this.isHandled()) {
-        try {
-          this.storage?.setItem(BACKUP_KEY, JSON.stringify(local));
-        } catch {
-          /* ignore */
-        }
-        this.ev.onClaimOffer(local);
-      }
       this.adopt(snapshot);
-      this.setMode("synced");
-      this.queue.flushNow();
+      if (!this.destroyed) { this.mode = "synced"; this.ev.onMode(this.mode); }
     } catch (e) {
-      if (e instanceof ApiClientError && e.status === 401) return this.goGuest();
-      // Offline / server down: keep working locally, keep the queue, try again later.
-      if (!this.destroyed) this.retryTimer = setTimeout(() => void this.connect(), 10_000);
+      if (!this.destroyed) {
+        this.mode = e instanceof ApiClientError && e.status === 401 ? "unauthenticated" : "unknown";
+        this.ev.onMode(this.mode);
+      }
+      throw e;
     }
   }
-
-  /** Re-read the server state (used after import/reset/rejections). */
-  async refresh(): Promise<void> {
-    try {
-      this.adopt(await api.getSnapshot());
-    } catch (e) {
-      if (e instanceof ApiClientError && e.status === 401) this.goGuest();
-    }
-  }
-
-  /** Server is authoritative; replay any unsent local edits on top so they are not lost. */
-  private adopt(snapshot: SnapshotDTO) {
-    this.stamps = new Map(Object.entries(snapshot.rowUpdatedAt));
-    const replayed = this.queue.pendingOps().reduce((acc, op) => applyOp(acc, op), fromSnapshot(snapshot));
-    this.ev.apply(replayed);
-  }
-
-  private async send(op: SyncOp): Promise<unknown> {
-    if (this.mode === "unknown") throw new ApiClientError("NETWORK", 0, "Waiting for the server");
+  private async send(op: SyncOp) {
+    if (this.mode !== "synced") throw new ApiClientError("UNAUTHENTICATED", 401, "Sign in required");
+    if (op.kind === "prefs") return api.patchPreferences({ ui: op.ui, filters: op.filters, celebratedMilestones: op.celebratedMilestones });
     if (op.kind === "plan") return api.putPlan(op.startDate);
-    if (op.kind === "prefs") return api.patchPreferences({ filters: op.filters, celebratedMilestones: op.celebratedMilestones });
-    const row = await api.putProgress(op.problemId, { ...op.body, clientUpdatedAt: this.stamps.get(op.problemId) });
-    this.stamps.set(op.problemId, row.updatedAt);
-    return row;
+    const row = await api.putProgress(op.problemId, { ...op.body, clientUpdatedAt: this.stamps[op.problemId] });
+    this.stamps[op.problemId] = row.updatedAt;
+    if (!this.destroyed && row.achievements) this.ev.onAchievements?.(row.achievements, row.newAchievements ?? []);
   }
-
-  private adoptConflict(op: SyncOp, err: ApiClientError) {
-    const current: ProgressRowDTO | undefined = err.current;
-    if (op.kind !== "row" || !current) return void this.refresh();
-    this.stamps.set(op.problemId, current.updatedAt);
-    const p = this.ev.getProgress();
-    const completed = { ...p.completed };
-    const notes = { ...p.notes };
-    const revision = { ...p.revision };
-    if (current.completed && current.completedDate) completed[op.problemId] = { date: current.completedDate, at: current.completedAt ?? Date.now() };
-    else delete completed[op.problemId];
-    if (current.note) notes[op.problemId] = current.note;
-    else delete notes[op.problemId];
-    if (current.revision) revision[op.problemId] = current.revision;
-    else delete revision[op.problemId];
-    this.ev.apply({ ...p, completed, notes, revision });
-    this.ev.notify("info", "Updated from another device");
+  private async drain() {
+    if (this.rejected.size) throw new Error("Some changes failed to save. Retry saving before continuing.");
+    this.queue.flushNow();
+    const deadline = Date.now() + 15_000;
+    while (this.hasPending()) {
+      if (this.destroyed || Date.now() > deadline || this.status.state === "offline") throw new Error("Changes are still unsaved. Retry when the server is available.");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (this.failed) throw new Error("A change failed to save. Review your progress before continuing.");
   }
+  async runExclusive(action: () => Promise<unknown>) {
+    if (this.exclusive || this.mode !== "synced") throw new Error("Wait for the current operation or sign in first.");
+    this.exclusive = true;
+    try { await this.drain(); await action(); await this.refresh(); }
+    finally { this.exclusive = false; }
+  }
+  importReplace(p: Progress) { return this.runExclusive(async () => { const result = await api.importData("replace", p); if (!this.destroyed && result.achievements) this.ev.onAchievements?.(result.achievements, result.newAchievements ?? []); }); }
+  reset() { return this.runExclusive(() => api.resetAll()); }
+  async exportText() { await this.drain(); return api.exportText(); }
 }
