@@ -1,7 +1,7 @@
 // Idempotent: upserts the sheet from data/problems.json by id. Safe to run on every deploy.
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../lib/generated/prisma/client";
+import { PrismaClient } from "../lib/prisma-client/client";
 import problems from "../data/problems.json";
 
 type Raw = {
